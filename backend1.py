@@ -1,0 +1,261 @@
+import pandas as pd
+import numpy as np
+from typing import Any, List, Optional
+
+class PengolahDataJBAH:
+    def __init__(self, file_path):
+        """Inisialisasi class dan memuat data mentah Excel."""
+        self.file_path = file_path
+        self.raw_data: Optional[pd.DataFrame] = None
+        try:
+            self.raw_data = pd.read_excel(self.file_path)
+            print(f"✅ Data mentah Excel berhasil dimuat dari: {self.file_path}")
+        except Exception as e:
+            print(f"❌ Error memuat data: {e}")
+            self.raw_data = None
+
+    def filter_data(self, filter_col, filter_value):
+        """Tahap II.1: Staging Data Utama (Filter dan Inisialisasi Dasar)"""
+        if self.raw_data is None:
+            return None
+
+        self.NILAI_FILTER = filter_value
+        self.staging_data = self.raw_data[self.raw_data[filter_col] == filter_value].copy()
+        self.staging_data.reset_index(drop=True, inplace=True)
+        
+        # Membuat string penggabungan surat.ayat
+        self.staging_data['surat_ayat'] = self.staging_data['aq_surat_id'].astype(str) + '.' + self.staging_data['surat_ayat_no'].astype(str)
+        self.total_ayat = len(self.staging_data)
+        
+        print(f"✅ Filter Data Siap: Total {self.total_ayat} ayat.")
+        return self.staging_data
+
+    def set_metode(self, metode="T111"):
+        """
+        Tahap Penentuan Poros (Metode Siklik):
+        Menggeser (shifting) array data agar target Blok F jatuh tepat di tengah.
+        """
+        self.metode_aktif = metode
+        N = self.total_ayat
+        
+        # 1. Tentukan posisi tengah absolut dari array
+        if N % 2 == 0:
+            center_pos = N // 2 - 1  # Indeks kiri dari 2 ayat tengah
+        else:
+            center_pos = N // 2
+            
+        # 2. Tentukan target indeks asli yang ingin dijadikan Blok F
+        if metode == "T111":
+            target_f_idx = center_pos 
+        elif metode == "T222":
+            target_f_idx = 0  # Poros di awal
+        elif metode == "T333":
+            if N % 2 == 0:
+                target_f_idx = N - 2  # Poros di akhir (2 ayat)
+            else:
+                target_f_idx = N - 1  # Poros di akhir (1 ayat)
+        else:
+            target_f_idx = center_pos # Default
+            
+        # 3. Hitung offset dan geser data secara sirkular (Modulo)
+        # Mencari indeks awal (0) baru agar target_f_idx jatuh tepat di center_pos
+        start_idx = (target_f_idx - center_pos) % N
+        new_order = [(start_idx + i) % N for i in range(N)]
+        
+        self.staging_data_met = self.staging_data.iloc[new_order].copy()
+        self.staging_data_met.reset_index(drop=True, inplace=True)
+        
+        # 4. Update Pelaporan Dasar berdasarkan poros baru
+        self.ayat_awal = self.staging_data_met.loc[0, 'surat_ayat']
+        self.ayat_akhir = self.staging_data_met.loc[N - 1, 'surat_ayat']
+        
+        print(f"\n🔄 Set Metode: {metode} | Ayat Awal Baru: {self.ayat_awal} | Ayat Akhir Baru: {self.ayat_akhir}")
+
+    def proses_1_dan_2(self):
+        """Tahap II.2.1 & II.2.2: Chunking Baku & Symmetrical Reordering"""
+        N = self.total_ayat
+        self.p1_dict = {}
+        
+        # 1. Menentukan Titik Tengah (Dari data yang sudah digeser siklik)
+        if N % 2 == 0:
+            mid_left = N // 2 - 1
+            mid_right = N // 2
+            self.titik_tengah = f"{self.staging_data_met.loc[mid_left, 'surat_ayat']}+{self.staging_data_met.loc[mid_right, 'surat_ayat']}"
+            left_idx = mid_left - 1
+            right_idx = mid_right + 1
+        else:
+            mid = N // 2
+            self.titik_tengah = self.staging_data_met.loc[mid, 'surat_ayat']
+            left_idx = mid - 1
+            right_idx = mid + 1
+            
+        self.p1_dict['F'] = [self.titik_tengah]
+
+        # 2. Template Baku Lebar Sayap (Mekar ke luar)
+        met1_widths = [
+            ('A', 'a', 5), ('B', 'b', 7), ('C1', 'c1', 7), ('C2', 'c2', 7),
+            ('D1', 'd1', 7), ('D2', 'd2', 7), ('D3', 'd3', 9),
+            ('E', 'e', 5), ('G', 'g', 1)
+        ]
+
+        # Ekstraksi blok simetris
+        for left_lbl, right_lbl, width in met1_widths:
+            # Karena data sudah di-shift, kita tidak akan pernah out-of-bounds 
+            # untuk lebar standar 98 ayat.
+            left_chunk = self.staging_data_met.loc[left_idx - width + 1 : left_idx, 'surat_ayat'].tolist()
+            right_chunk = self.staging_data_met.loc[right_idx : right_idx + width - 1, 'surat_ayat'].tolist()
+            
+            self.p1_dict[left_lbl] = left_chunk
+            self.p1_dict[right_lbl] = right_chunk
+            
+            left_idx -= width
+            right_idx += width
+
+        # 3. Merakit DataFrame Proses 1
+        order_p1 = ['G', 'E', 'D3', 'D2', 'D1', 'C2', 'C1', 'B', 'A', 'F', 'a', 'b', 'c1', 'c2', 'd1', 'd2', 'd3', 'e', 'g']
+        df_p1 = pd.DataFrame(dict([(k, pd.Series(self.p1_dict.get(k, []))) for k in order_p1])).T
+        df_p1.reset_index(inplace=True)
+        df_p1.columns = ['Label'] + [f'Ayat {i+1}' for i in range(df_p1.shape[1]-1)]
+        self.df_p1 = df_p1
+
+        # 4. Merakit DataFrame Proses 2 (Reordering Eksklusif 15 Blok)
+        order_p2 = ['F', 'A', 'a', 'B', 'b', 'C2', 'C1', 'c1', 'c2', 'D3', 'D2', 'D1', 'd1', 'd2', 'd3']
+        df_p2 = pd.DataFrame(dict([(k, pd.Series(self.p1_dict.get(k, []))) for k in order_p2])).T
+        df_p2.reset_index(inplace=True)
+        df_p2.columns = ['Label'] + [f'Ayat {i+1}' for i in range(df_p2.shape[1]-1)]
+        self.df_p2 = df_p2
+        
+        print(f"✅ Proses 1 & Proses 2 ({self.metode_aktif}) Selesai.")
+
+    def proses_3(self):
+        """Tahap II.2.3: Flattening, Merger & Indexing Mutlak"""
+        flat_data = []
+        p3_id_counter = 1
+        
+        for idx, row in self.df_p2.iterrows():
+            label = row['Label']
+            for col in self.df_p2.columns[1:]:
+                ayat = row[col]
+                if pd.notna(ayat):
+                    flat_data.append([p3_id_counter, label, ayat])
+                    p3_id_counter += 1
+                    
+        self.df_p3 = pd.DataFrame(flat_data, columns=['p3_id', 'Label', 'Ayat'])
+        
+        # Ekstraksi Variabel AT-H & AT-AH
+        try:
+            self.at_h = self.df_p3.loc[38, 'Ayat'] # p3_id 39
+            self.at_ah = self.df_p3.loc[49, 'Ayat'] # p3_id 50 (Dhzo)
+        except KeyError:
+            self.at_h = "Index Tidak Ditemukan"
+            self.at_ah = "Index Tidak Ditemukan"
+
+    def generate_tabel_jb_init(self):
+        """Tahap II.2.4: Dashboard JB (Init)"""
+        def get_padded_list(label, length=5):
+            lst = self.p1_dict.get(label, [])
+            return lst + [None] * (length - len(lst))
+
+        tabel_jb_data = [
+            ["Variabel", "Ayat1", "Ayat2", "Ayat3", "Ayat4", "Ayat5"],
+            [f"Ayat Awal {self.metode_aktif}", self.ayat_awal, None, None, None, None],
+            [f"Ayat Akhir {self.metode_aktif}", self.ayat_akhir, None, None, None, None],
+            [f"Ayat Tengah {self.metode_aktif}", self.titik_tengah, None, None, None, None],
+            [f"Ayat F {self.metode_aktif}"] + get_padded_list('F'),
+            [f"Ayat A {self.metode_aktif}"] + get_padded_list('A'),
+            [f"Ayat a {self.metode_aktif}"] + get_padded_list('a'),
+            [f"Ayat Dhzo {self.metode_aktif}", self.at_ah, None, None, None, None],
+            [f"Ayat E {self.metode_aktif}"] + get_padded_list('E'),
+            [f"Ayat G {self.metode_aktif}"] + get_padded_list('G'),
+            [f"Ayat e {self.metode_aktif}"] + get_padded_list('e'),
+            [f"Ayat g {self.metode_aktif}"] + get_padded_list('g'),
+            [f"Ayat AT-H {self.metode_aktif}", self.at_h, None, None, None, None],
+            [f"Ayat AT-Juz {self.metode_aktif}", self.titik_tengah, None, None, None, None],
+            [f"Ayat AT-AH {self.metode_aktif}", self.at_ah, None, None, None, None],
+            ["Total Ayat", f"{self.total_ayat} ayat", None, None, None, None]
+        ]
+        
+        kolom = [f'Tabel JB {self.metode_aktif} Juz {self.NILAI_FILTER}', 'Ayat1', 'Ayat2', 'Ayat3', 'Ayat4', 'Ayat5']
+        self.df_init = pd.DataFrame(tabel_jb_data[1:], columns=kolom)
+
+    def generate_tabel_ah_final(self):
+        """Tahap II.2.5: Tabel Asmaul Husna"""
+        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'I', 'II', 'III', 'IV', 'v', 'VI', 'VII']
+        arab_chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ھ', 'لا', 'ء', 'ي', 'ال', 'ة', 'هؤ']
+        
+        baris_final: List[List[Any]] = []
+        baris_final.append(['Konsep Dasar metode per ayat', None, None, None, None, None, None, None, None, None])
+        baris_final.append([None, self.metode_aktif, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None, None])
+        baris_final.append([None, 'Latin & Hari', None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
+        baris_final.append(['Latin', 'No', 'Ayat #3', 'No', 'Ayat #4', 'No', 'Ayat #2', 'No', 'Ayat #1', 'Arab'])
+        
+        for i in range(1, 34):
+            idx_1 = 3 * i - 2
+            idx_2 = 3 * i - 1
+            idx_3 = 3 * i
+            idx_4 = 101 - idx_3
+            
+            ayat1 = self.df_p3.loc[idx_1 - 1, 'Ayat'] if idx_1 <= len(self.df_p3) else None
+            ayat2 = self.df_p3.loc[idx_2 - 1, 'Ayat'] if idx_2 <= len(self.df_p3) else None
+            ayat3 = self.df_p3.loc[idx_3 - 1, 'Ayat'] if idx_3 <= len(self.df_p3) else None
+            ayat4 = self.df_p3.loc[idx_4 - 1, 'Ayat'] if idx_4 <= len(self.df_p3) else None
+            
+            huruf_latin = latin_chars[i-1]
+            huruf_arab = arab_chars[i-1]
+            
+            baris = [huruf_latin, idx_3, ayat3, idx_4, ayat4, idx_2, ayat2, idx_1, ayat1, huruf_arab]
+            baris_final.append(baris)
+
+        kolom = ['TABEL ASMAUL HUSNA', None, None, None, None, None, None, None, None, None]
+        self.df_final = pd.DataFrame(baris_final, columns=kolom)
+
+    def export_excel(self, output_name, jenis="advance"):
+        """Ekspor hasil ke file Excel"""
+        with pd.ExcelWriter(output_name, engine='openpyxl') as writer:
+            if jenis == "advance":
+                self.df_init.to_excel(writer, sheet_name='Init', index=False)
+                self.df_p1.to_excel(writer, sheet_name='Proses 1', index=False)
+                self.df_p2.to_excel(writer, sheet_name='Proses 2', index=False)
+                self.df_p3.to_excel(writer, sheet_name='Proses 3', index=False)
+                self.df_final.to_excel(writer, sheet_name='Final', index=False)
+            else:
+                self.df_init.to_excel(writer, sheet_name='Init', index=False)
+                self.df_final.to_excel(writer, sheet_name='Final', index=False)
+        print(f"🚀 File {self.metode_aktif} disimpan sebagai: {output_name}")
+
+# ==========================================
+# --- SIMULASI EKSEKUSI MULTI-METODE ---
+# ==========================================
+if __name__ == "__main__":
+    print("--- MEMULAI PENGOLAH DATA JBAH (ALL METHODS) ---")
+    
+    FILE_MENTAH = "Struktur Quran18.xlsx"
+    KOLOM_FILTER = "aq_juz_id"
+    NILAI_FILTER = 1  # Ganti sesuai Juz yang ingin dites
+    JENIS_OUTPUT = "advance"
+
+    app = PengolahDataJBAH(FILE_MENTAH)
+    
+    if app.raw_data is not None:
+        # 1. Lakukan Filter Data Utama (Hanya perlu sekali)
+        app.filter_data(KOLOM_FILTER, NILAI_FILTER)
+        
+        # 2. Iterasi untuk memproses T111, T222, dan T333
+        daftar_metode = ["T111", "T222", "T333"]
+        
+        for metode in daftar_metode:
+            NAMA_FILE_OUTPUT = f"Output_JBAH_Juz{NILAI_FILTER}_{metode}.xlsx"
+            
+            # Terapkan metode (shifting data)
+            app.set_metode(metode)
+            
+            # Jalankan Pipeline (Tanpa perlu ubah logika Proses!)
+            app.proses_1_dan_2()
+            app.proses_3()
+            app.generate_tabel_jb_init()
+            app.generate_tabel_ah_final()
+            
+            # Ekspor File (Setiap metode dipisah ke filenya masing-masing)
+            app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
+            
+    print("\n✅✅ SELURUH PROSES SELESAI ✅✅")
