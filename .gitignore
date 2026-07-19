@@ -1,0 +1,4 @@
+__pycache__/
+.venv/
+dataoutput/
+git_status.txt

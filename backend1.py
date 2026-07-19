@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 from typing import Any, List, Optional
@@ -229,7 +230,7 @@ class PengolahDataJBAH:
 if __name__ == "__main__":
     print("--- MEMULAI PENGOLAH DATA JBAH (ALL METHODS) ---")
     
-    FILE_MENTAH = "Struktur Quran18.xlsx"
+    FILE_MENTAH = os.path.join("datasource", "Struktur Quran18.xlsx")
     KOLOM_FILTER = "aq_juz_id"
     NILAI_FILTER = 1  # Ganti sesuai Juz yang ingin dites
     JENIS_OUTPUT = "advance"
@@ -244,7 +245,7 @@ if __name__ == "__main__":
         daftar_metode = ["T111", "T222", "T333"]
         
         for metode in daftar_metode:
-            NAMA_FILE_OUTPUT = f"Output_JBAH_Juz{NILAI_FILTER}_{metode}.xlsx"
+            NAMA_FILE_OUTPUT = os.path.join("dataoutput", f"Output_JBAH_Juz{NILAI_FILTER}_{metode}.xlsx")
             
             # Terapkan metode (shifting data)
             app.set_metode(metode)
