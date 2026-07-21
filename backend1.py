@@ -10,26 +10,45 @@ class PengolahDataJBAH:
         self.raw_data: Optional[pd.DataFrame] = None
         try:
             self.raw_data = pd.read_excel(self.file_path)
-            print(f"✅ Data mentah Excel berhasil dimuat dari: {self.file_path}")
+            print(f"[OK] Data mentah Excel berhasil dimuat dari: {self.file_path}")
         except Exception as e:
-            print(f"❌ Error memuat data: {e}")
+            print(f"[ERROR] Error memuat data: {e}")
             self.raw_data = None
 
     def filter_data(self, filter_col, filter_value):
         """Tahap II.1: Staging Data Utama (Filter dan Inisialisasi Dasar)"""
         if self.raw_data is None:
+            print("[ERROR] raw_data is None, cannot filter.")
             return None
 
-        self.NILAI_FILTER = filter_value
-        self.staging_data = self.raw_data[self.raw_data[filter_col] == filter_value].copy()
-        self.staging_data.reset_index(drop=True, inplace=True)
-        
-        # Membuat string penggabungan surat.ayat
-        self.staging_data['surat_ayat'] = self.staging_data['aq_surat_id'].astype(str) + '.' + self.staging_data['surat_ayat_no'].astype(str)
-        self.total_ayat = len(self.staging_data)
-        
-        print(f"✅ Filter Data Siap: Total {self.total_ayat} ayat.")
-        return self.staging_data
+        try:
+            # Check if filter column exists
+            if filter_col not in self.raw_data.columns:
+                print(f"[ERROR] Kolom '{filter_col}' tidak ditemukan di data. Kolom yang tersedia: {list(self.raw_data.columns)}")
+                return None
+
+            self.NILAI_FILTER = filter_value
+            self.staging_data = self.raw_data[self.raw_data[filter_col] == filter_value].copy()
+            
+            # Check if any rows were found
+            if len(self.staging_data) == 0:
+                unique_values = self.raw_data[filter_col].unique()
+                print(f"[ERROR] Tidak ada data untuk {filter_col} = {filter_value}. Nilai yang tersedia: {sorted(unique_values)}")
+                return None
+
+            self.staging_data.reset_index(drop=True, inplace=True)
+            
+            # Membuat string penggabungan surat.ayat
+            self.staging_data['surat_ayat'] = self.staging_data['aq_surat_id'].astype(str) + '.' + self.staging_data['surat_ayat_no'].astype(str)
+            self.total_ayat = len(self.staging_data)
+            
+            print(f"[OK] Filter Data Siap: Total {self.total_ayat} ayat.")
+            return self.staging_data
+        except Exception as e:
+            print(f"[ERROR] Error saat filtering data: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def set_metode(self, metode="T111"):
         """
@@ -70,7 +89,7 @@ class PengolahDataJBAH:
         self.ayat_awal = self.staging_data_met.loc[0, 'surat_ayat']
         self.ayat_akhir = self.staging_data_met.loc[N - 1, 'surat_ayat']
         
-        print(f"\n🔄 Set Metode: {metode} | Ayat Awal Baru: {self.ayat_awal} | Ayat Akhir Baru: {self.ayat_akhir}")
+        print(f"\n[INFO] Set Metode: {metode} | Ayat Awal Baru: {self.ayat_awal} | Ayat Akhir Baru: {self.ayat_akhir}")
 
     def proses_1_dan_2(self):
         """Tahap II.2.1 & II.2.2: Chunking Baku & Symmetrical Reordering"""
@@ -126,7 +145,7 @@ class PengolahDataJBAH:
         df_p2.columns = ['Label'] + [f'Ayat {i+1}' for i in range(df_p2.shape[1]-1)]
         self.df_p2 = df_p2
         
-        print(f"✅ Proses 1 & Proses 2 ({self.metode_aktif}) Selesai.")
+        print(f"[OK] Proses 1 & Proses 2 ({self.metode_aktif}) Selesai.")
 
     def proses_3(self):
         """Tahap II.2.3: Flattening, Merger & Indexing Mutlak"""
@@ -222,7 +241,7 @@ class PengolahDataJBAH:
             else:
                 self.df_init.to_excel(writer, sheet_name='Init', index=False)
                 self.df_final.to_excel(writer, sheet_name='Final', index=False)
-        print(f"🚀 File {self.metode_aktif} disimpan sebagai: {output_name}")
+        print(f"[OK] File {self.metode_aktif} disimpan sebagai: {output_name}")
 
 # ==========================================
 # --- SIMULASI EKSEKUSI MULTI-METODE ---
@@ -230,11 +249,14 @@ class PengolahDataJBAH:
 if __name__ == "__main__":
     print("--- MEMULAI PENGOLAH DATA JBAH (ALL METHODS) ---")
     
-    FILE_MENTAH = os.path.join("datasource", "Struktur Quran18.xlsx")
+    # Get script directory to handle paths correctly
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    FILE_MENTAH = os.path.join(script_dir, "datasource", "Struktur Quran18.xlsx")
     KOLOM_FILTER = "aq_juz_id"
     NILAI_FILTER = 1  # Ganti sesuai Juz yang ingin dites
     JENIS_OUTPUT = "advance"
-
+    
     app = PengolahDataJBAH(FILE_MENTAH)
     
     if app.raw_data is not None:
@@ -244,8 +266,12 @@ if __name__ == "__main__":
         # 2. Iterasi untuk memproses T111, T222, dan T333
         daftar_metode = ["T111", "T222", "T333"]
         
+        # Create dataoutput directory if it doesn't exist
+        output_dir = os.path.join(script_dir, "dataoutput")
+        os.makedirs(output_dir, exist_ok=True)
+        
         for metode in daftar_metode:
-            NAMA_FILE_OUTPUT = os.path.join("dataoutput", f"Output_JBAH_Juz{NILAI_FILTER}_{metode}.xlsx")
+            NAMA_FILE_OUTPUT = os.path.join(output_dir, f"Output_JBAH_Juz{NILAI_FILTER}_{metode}.xlsx")
             
             # Terapkan metode (shifting data)
             app.set_metode(metode)
@@ -259,4 +285,4 @@ if __name__ == "__main__":
             # Ekspor File (Setiap metode dipisah ke filenya masing-masing)
             app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
             
-    print("\n✅✅ SELURUH PROSES SELESAI ✅✅")
+    print("\n[OK] SELURUH PROSES SELESAI")
