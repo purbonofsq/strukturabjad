@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+dataoutput/
+jbah_ayat_per_hain/
+rawprocess/
+git_status.txt
+rawahaq_expanded.xlsx
+datasource/rawahaq.xlsx
