@@ -204,10 +204,10 @@ class PengolahDataJBAH:
         arab_chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ھ', 'لا', 'ء', 'ي', 'ال', 'ة', 'هؤ']
         
         baris_final: List[List[Any]] = []
-        baris_final.append(['Konsep Dasar metode per ayat', None, None, None, None, None, None, None, None, None])
-        baris_final.append([None, self.metode_aktif, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None, None])
+        baris_final.append(['Konsep Dasar (metode jumlah ayat dalam juz)', None, None, None, None, None, None, None, None, None])
+        baris_final.append([None, self.metode_aktif, None, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None])
         baris_final.append([None, 'Latin & Hari', None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
-        baris_final.append(['Latin', 'No', 'Ayat #3', 'No', 'Ayat #4', 'No', 'Ayat #2', 'No', 'Ayat #1', 'Arab'])
+        baris_final.append(['Latin', 'No AH', 'Ayat #3', 'No AH', 'Ayat #4', 'No AH', 'Ayat #2', 'No AH', 'Ayat #1', 'Arab'])
         
         for i in range(1, 34):
             idx_1 = 3 * i - 2
