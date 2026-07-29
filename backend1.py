@@ -3,6 +3,10 @@ import pandas as pd
 import numpy as np
 from typing import Any, List, Optional
 
+# Tambahan Import untuk Styling Excel
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
 class PengolahDataJBAH:
     def __init__(self, file_path):
         """Inisialisasi class dan memuat data mentah Excel."""
@@ -96,7 +100,7 @@ class PengolahDataJBAH:
         N = self.total_ayat
         self.p1_dict = {}
         
-        # 1. Menentukan Titik Tengah (Dari data yang sudah digeser siklik)
+        # 1. Menentukan Titik Tengah
         if N % 2 == 0:
             mid_left = N // 2 - 1
             mid_right = N // 2
@@ -118,10 +122,7 @@ class PengolahDataJBAH:
             ('E', 'e', 5), ('G', 'g', 1)
         ]
 
-        # Ekstraksi blok simetris
         for left_lbl, right_lbl, width in met1_widths:
-            # Karena data sudah di-shift, kita tidak akan pernah out-of-bounds 
-            # untuk lebar standar 98 ayat.
             left_chunk = self.staging_data_met.loc[left_idx - width + 1 : left_idx, 'surat_ayat'].tolist()
             right_chunk = self.staging_data_met.loc[right_idx : right_idx + width - 1, 'surat_ayat'].tolist()
             
@@ -162,7 +163,6 @@ class PengolahDataJBAH:
                     
         self.df_p3 = pd.DataFrame(flat_data, columns=['p3_id', 'Label', 'Ayat'])
         
-        # Ekstraksi Variabel AT-H & AT-AH
         try:
             self.at_h = self.df_p3.loc[38, 'Ayat'] # p3_id 39
             self.at_ah = self.df_p3.loc[49, 'Ayat'] # p3_id 50 (Dhzo)
@@ -200,13 +200,13 @@ class PengolahDataJBAH:
 
     def generate_tabel_ah_final(self):
         """Tahap II.2.5: Tabel Asmaul Husna"""
-        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'I', 'II', 'III', 'IV', 'v', 'VI', 'VII']
+        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'I', 'II', 'III', 'Iv', 'V', 'VI', 'VII']
         arab_chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ھ', 'لا', 'ء', 'ي', 'ال', 'ة', 'هؤ']
         
         baris_final: List[List[Any]] = []
         baris_final.append(['Konsep Dasar (metode jumlah ayat dalam juz)', None, None, None, None, None, None, None, None, None])
         baris_final.append([None, self.metode_aktif, None, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None])
-        baris_final.append([None, 'Latin & Hari', None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
+        baris_final.append(['Latin & Hari', None, None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
         baris_final.append(['Latin', 'No AH', 'Ayat #3', 'No AH', 'Ayat #4', 'No AH', 'Ayat #2', 'No AH', 'Ayat #1', 'Arab'])
         
         for i in range(1, 34):
@@ -244,45 +244,156 @@ class PengolahDataJBAH:
         print(f"[OK] File {self.metode_aktif} disimpan sebagai: {output_name}")
 
 # ==========================================
+# --- CLASS BARU UNTUK STYLING TABEL ---
+# ==========================================
+class FormatterTabelFinal:
+    def __init__(self, file_path, sheet_name="Final"):
+        self.file_path = file_path
+        self.sheet_name = sheet_name
+
+    def apply_formatting(self):
+        try:
+            wb = openpyxl.load_workbook(self.file_path)
+            
+            if self.sheet_name not in wb.sheetnames:
+                print(f"[WARNING] Sheet '{self.sheet_name}' tidak ditemukan.")
+                return
+                
+            ws = wb[self.sheet_name]
+
+            # Style definitions
+            font_title = Font(name="Arial", size=14, bold=True, color="000000")
+            font_subtitle = Font(name="Arial", size=11, bold=True, italic=True)
+            font_header = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+            font_body_regular = Font(name="Arial", size=10)
+            font_arab = Font(name="Arial", size=12, bold=True)
+            font_label = Font(name="Arial", size=10, bold=True, color="000000")
+            font_label_italic = Font(name="Arial", size=10, bold=True, italic=True)
+            font_label_bold = Font(name="Arial", size=10, bold=True)
+
+            align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            align_center_top = Alignment(horizontal="center", vertical="top", wrap_text=True)
+            
+            fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid") 
+            fill_alt_row = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid") 
+            
+            thin_border = Border(
+                left=Side(style='thin'), right=Side(style='thin'),
+                top=Side(style='thin'), bottom=Side(style='thin')
+            )
+            thick_border = Border(
+                left=Side(style='thick'), right=Side(style='thick'),
+                top=Side(style='thick'), bottom=Side(style='thick')
+            )
+
+            # Format Header (Merge Cells & Styling)
+            ws.merge_cells('A1:J1')
+            ws['A1'].font = font_title
+            ws['A1'].alignment = align_center
+
+            ws.merge_cells('A2:J2')
+            ws['A2'].font = font_subtitle
+            ws['A2'].alignment = align_center
+
+            ws.merge_cells('A4:C4')
+            # ws['A4'].font = font_header
+            ws['A4'].alignment = align_center
+            ws['A4'].border = thick_border
+            ws['A4'].font = font_label
+
+            ws.merge_cells('D4:G4')
+            # ws['D4'].font = font_header
+            ws['D4'].alignment = align_center
+            ws['D4'].border = thick_border
+            ws['D4'].font = font_label
+
+            ws.merge_cells('H4:J4')
+            # ws['H4'].font = font_header
+            ws['H4'].alignment = align_center
+            ws['H4'].border = thick_border
+            ws['H4'].font = font_label
+
+            ws['B3'].font = font_label_italic
+            ws['I3'].font = font_subtitle
+                       
+            
+            # Format Kolom Header Aktual (Baris 5)
+            for col in range(1, 11):
+                cell = ws.cell(row=5, column=col)
+                cell.font = font_header
+                cell.fill = fill_header
+                cell.alignment = align_center
+                cell.border = thin_border
+
+            # Format Body
+            max_r = ws.max_row
+            max_c = 10 
+            
+            for row in range(6, max_r + 1):
+                for col in range(1, max_c + 1):
+                    cell = ws.cell(row=row, column=col)
+                    cell.alignment = align_center_top
+                    cell.border = thin_border
+                    
+                    if col == 10:
+                        cell.font = font_arab
+                    elif col == 1:
+                        cell.font = font_label_italic
+                    elif col == 2 or col == 4 or col == 6 or col == 8:
+                        cell.font = font_label_bold
+                    else:
+                        cell.font = font_body_regular
+                        
+                    if row % 2 == 0:
+                        cell.fill = fill_alt_row
+
+            # Lebar Kolom
+            column_widths = {'A': 5, 'B': 7, 'C': 10, 'D': 4, 'E': 10, 'F': 4, 'G': 10, 'H': 7, 'I': 15, 'J': 5}
+            for col_letter, width in column_widths.items():
+                ws.column_dimensions[col_letter].width = width
+
+            wb.save(self.file_path)
+            print(f"[OK] Format dan Style berhasil diaplikasikan pada sheet '{self.sheet_name}'")
+
+        except Exception as e:
+            print(f"[ERROR] Gagal melakukan styling: {e}")
+
+# ==========================================
 # --- SIMULASI EKSEKUSI MULTI-METODE ---
 # ==========================================
 if __name__ == "__main__":
     print("--- MEMULAI PENGOLAH DATA JBAH (ALL METHODS) ---")
     
-    # Get script directory to handle paths correctly
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    
     FILE_MENTAH = os.path.join(script_dir, "datasource", "Struktur Quran18.xlsx")
     KOLOM_FILTER = "aq_juz_id"
-    NILAI_FILTER = 1  # Ganti sesuai Juz yang ingin dites
+    NILAI_FILTER = 1  
     JENIS_OUTPUT = "advance"
     
     app = PengolahDataJBAH(FILE_MENTAH)
     
     if app.raw_data is not None:
-        # 1. Lakukan Filter Data Utama (Hanya perlu sekali)
         app.filter_data(KOLOM_FILTER, NILAI_FILTER)
         
-        # 2. Iterasi untuk memproses T111, T222, dan T333
         daftar_metode = ["T111", "T222", "T333"]
         
-        # Create dataoutput directory if it doesn't exist
         output_dir = os.path.join(script_dir, "dataoutput")
         os.makedirs(output_dir, exist_ok=True)
         
         for metode in daftar_metode:
             NAMA_FILE_OUTPUT = os.path.join(output_dir, f"Output_JBAH_Juz{NILAI_FILTER}_{metode}.xlsx")
             
-            # Terapkan metode (shifting data)
             app.set_metode(metode)
-            
-            # Jalankan Pipeline (Tanpa perlu ubah logika Proses!)
             app.proses_1_dan_2()
             app.proses_3()
             app.generate_tabel_jb_init()
             app.generate_tabel_ah_final()
             
-            # Ekspor File (Setiap metode dipisah ke filenya masing-masing)
+            # Tahap ekspor file ke raw Excel 
             app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
+            
+            # TAHAP BARU: Styling File Excel yg baru saja dibuat
+            formatter = FormatterTabelFinal(NAMA_FILE_OUTPUT, sheet_name="Final")
+            formatter.apply_formatting()
             
     print("\n[OK] SELURUH PROSES SELESAI")
