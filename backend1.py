@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 import pandas as pd
 import numpy as np
 from typing import Any, List, Optional
@@ -8,9 +9,11 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 class PengolahDataJBAH:
-    def __init__(self, file_path):
+    def __init__(self, file_path, concept_label="Konsep Dasar (metode jumlah ayat dalam juz)", signature_text="Digital Signature"):
         """Inisialisasi class dan memuat data mentah Excel."""
         self.file_path = file_path
+        self.concept_label = concept_label
+        self.signature_text = signature_text
         self.raw_data: Optional[pd.DataFrame] = None
         try:
             self.raw_data = pd.read_excel(self.file_path)
@@ -204,7 +207,7 @@ class PengolahDataJBAH:
         arab_chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ھ', 'لا', 'ء', 'ي', 'ال', 'ة', 'هؤ']
         
         baris_final: List[List[Any]] = []
-        baris_final.append(['Konsep Dasar (metode jumlah ayat dalam juz)', None, None, None, None, None, None, None, None, None])
+        baris_final.append([self.concept_label, None, None, None, None, None, None, None, None, None])
         baris_final.append([None, self.metode_aktif, None, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None])
         baris_final.append(['Latin & Hari', None, None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
         baris_final.append(['Latin', 'No AH', 'Ayat #3', 'No AH', 'Ayat #4', 'No AH', 'Ayat #2', 'No AH', 'Ayat #1', 'Arab'])
@@ -247,9 +250,10 @@ class PengolahDataJBAH:
 # --- CLASS BARU UNTUK STYLING TABEL ---
 # ==========================================
 class FormatterTabelFinal:
-    def __init__(self, file_path, sheet_name="Final"):
+    def __init__(self, file_path, sheet_name="Final", signature_text="Digital Signature"):
         self.file_path = file_path
         self.sheet_name = sheet_name
+        self.signature_text = signature_text
 
     def apply_formatting(self):
         try:
@@ -352,6 +356,31 @@ class FormatterTabelFinal:
             for col_letter, width in column_widths.items():
                 ws.column_dimensions[col_letter].width = width
 
+            # Tambahkan blok signature yang terlihat di bawah tabel
+            signature_row = ws.max_row + 2
+            signature_title = "__"
+            signature_stamp = f": {self.signature_text}"
+            signature_time = f": {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+            ws.merge_cells(start_row=signature_row, start_column=1, end_row=signature_row, end_column=10)
+            ws.cell(signature_row, 1, value=signature_title)
+            ws.cell(signature_row, 1).font = Font(name="Arial", size=12, bold=True, color="1F497D")
+            ws.cell(signature_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(signature_row, 1).fill = PatternFill(start_color="E9F2FF", end_color="E9F2FF", fill_type="solid")
+            ws.cell(signature_row, 1).border = thin_border
+
+            ws.merge_cells(start_row=signature_row + 1, start_column=1, end_row=signature_row + 1, end_column=10)
+            ws.cell(signature_row + 1, 1, value=signature_stamp)
+            ws.cell(signature_row + 1, 1).font = font_label_bold
+            ws.cell(signature_row + 1, 1).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(signature_row + 1, 1).border = thin_border
+
+            ws.merge_cells(start_row=signature_row + 2, start_column=1, end_row=signature_row + 2, end_column=10)
+            ws.cell(signature_row + 2, 1, value=signature_time)
+            ws.cell(signature_row + 2, 1).font = Font(name="Arial", size=9, italic=True)
+            ws.cell(signature_row + 2, 1).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(signature_row + 2, 1).border = thin_border
+
             wb.save(self.file_path)
             print(f"[OK] Format dan Style berhasil diaplikasikan pada sheet '{self.sheet_name}'")
 
@@ -370,7 +399,9 @@ if __name__ == "__main__":
     NILAI_FILTER = 1  
     JENIS_OUTPUT = "advance"
     
-    app = PengolahDataJBAH(FILE_MENTAH)
+    concept_label = input("Masukkan label konsep dasar (default: Konsep Dasar (metode jumlah ayat dalam juz)): ").strip() or "Konsep Dasar (metode jumlah ayat dalam juz)"
+    signature_text = input("Masukkan tanda tangan / penandatangan (default: Digital Signature): ").strip() or "Digital Signature"
+    app = PengolahDataJBAH(FILE_MENTAH, concept_label=concept_label, signature_text=signature_text)
     
     if app.raw_data is not None:
         app.filter_data(KOLOM_FILTER, NILAI_FILTER)
@@ -393,7 +424,7 @@ if __name__ == "__main__":
             app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
             
             # TAHAP BARU: Styling File Excel yg baru saja dibuat
-            formatter = FormatterTabelFinal(NAMA_FILE_OUTPUT, sheet_name="Final")
+            formatter = FormatterTabelFinal(NAMA_FILE_OUTPUT, sheet_name="Final", signature_text=signature_text)
             formatter.apply_formatting()
             
     print("\n[OK] SELURUH PROSES SELESAI")

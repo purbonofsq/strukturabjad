@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from backend1 import PengolahDataJBAH
+from backend1 import PengolahDataJBAH, FormatterTabelFinal
 from dataextraction import save_filtered_data_to_excel
 
 def sanitize_filename(name):
@@ -146,8 +146,13 @@ def main():
         print(f"[INFO] Template disesuaikan (auto-tambah {{juz}}): {file_template}")
     # else: keduanya ada, biarkan seperti input user
     
+    default_concept_label = "Konsep Dasar (metode jumlah ayat dalam juz)"
+    concept_label = input(f"Masukkan label konsep dasar (default: {default_concept_label}): ").strip() or default_concept_label
+    default_signature = "Digital Signature"
+    signature_text = input(f"Masukkan tanda tangan / penandatangan (default: {default_signature}): ").strip() or default_signature
+
     # Initialize and process
-    app = PengolahDataJBAH(FILE_MENTAH)
+    app = PengolahDataJBAH(FILE_MENTAH, concept_label=concept_label, signature_text=signature_text)
     
     if app.raw_data is not None:
         # Process all methods for each Juz
@@ -191,6 +196,10 @@ def main():
                 
                 # Export file
                 app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
+                
+                # Apply styling/formatting
+                formatter = FormatterTabelFinal(NAMA_FILE_OUTPUT, sheet_name="Final", signature_text=signature_text)
+                formatter.apply_formatting()
     
     print("\n[OK] SELURUH PROSES SELESAI")
 
