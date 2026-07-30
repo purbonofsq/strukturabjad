@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from backend1 import PengolahDataJBAH, FormatterTabelFinal
+from backend1 import PengolahDataJBAH
 from dataextraction import save_filtered_data_to_excel
 
 def sanitize_filename(name):
@@ -194,12 +194,8 @@ def main():
                 app.generate_tabel_jb_init()
                 app.generate_tabel_ah_final()
                 
-                # Export file
+                # Export file dan terapkan formatting melalui modul output terpisah
                 app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
-                
-                # Apply styling/formatting
-                formatter = FormatterTabelFinal(NAMA_FILE_OUTPUT, sheet_name="Final", signature_text=signature_text)
-                formatter.apply_formatting()
     
     print("\n[OK] SELURUH PROSES SELESAI")
 
