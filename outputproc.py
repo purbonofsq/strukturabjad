@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
 
 
 def write_excel_output(processor, output_name, jenis="advance"):
@@ -77,7 +78,7 @@ class FormatterTabelFinal:
         ws.freeze_panes = "A2"
 
         for col in range(1, ws.max_column + 1):
-            column_letter = openpyxl.utils.get_column_letter(col)
+            column_letter = get_column_letter(col)
             max_length = 0
             for row in range(1, ws.max_row + 1):
                 cell_value = ws.cell(row=row, column=col).value
