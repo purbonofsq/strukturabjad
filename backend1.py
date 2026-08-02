@@ -1,20 +1,19 @@
 import os
+import pandas as pd
+import numpy as np
 from typing import Any, List, Optional
 
-import pandas as pd
-
-from dataprep import load_raw_excel, prepare_staging_data
-from outputproc import export_and_format_output
-
 class PengolahDataJBAH:
-    def __init__(self, file_path, concept_label="Konsep Dasar (metode jumlah ayat dalam juz)", signature_text="Digital Signature"):
+    def __init__(self, file_path):
         """Inisialisasi class dan memuat data mentah Excel."""
         self.file_path = file_path
-        self.concept_label = concept_label
-        self.signature_text = signature_text
-        self.raw_data: Optional[pd.DataFrame] = load_raw_excel(self.file_path)
-        if self.raw_data is not None:
+        self.raw_data: Optional[pd.DataFrame] = None
+        try:
+            self.raw_data = pd.read_excel(self.file_path)
             print(f"[OK] Data mentah Excel berhasil dimuat dari: {self.file_path}")
+        except Exception as e:
+            print(f"[ERROR] Error memuat data: {e}")
+            self.raw_data = None
 
     def filter_data(self, filter_col, filter_value):
         """Tahap II.1: Staging Data Utama (Filter dan Inisialisasi Dasar)"""
@@ -22,14 +21,34 @@ class PengolahDataJBAH:
             print("[ERROR] raw_data is None, cannot filter.")
             return None
 
-        self.NILAI_FILTER = filter_value
-        self.staging_data = prepare_staging_data(self.raw_data, filter_col, filter_value)
-        if self.staging_data is None:
-            return None
+        try:
+            # Check if filter column exists
+            if filter_col not in self.raw_data.columns:
+                print(f"[ERROR] Kolom '{filter_col}' tidak ditemukan di data. Kolom yang tersedia: {list(self.raw_data.columns)}")
+                return None
 
-        self.total_ayat = len(self.staging_data)
-        print(f"[OK] Filter Data Siap: Total {self.total_ayat} ayat.")
-        return self.staging_data
+            self.NILAI_FILTER = filter_value
+            self.staging_data = self.raw_data[self.raw_data[filter_col] == filter_value].copy()
+            
+            # Check if any rows were found
+            if len(self.staging_data) == 0:
+                unique_values = self.raw_data[filter_col].unique()
+                print(f"[ERROR] Tidak ada data untuk {filter_col} = {filter_value}. Nilai yang tersedia: {sorted(unique_values)}")
+                return None
+
+            self.staging_data.reset_index(drop=True, inplace=True)
+            
+            # Membuat string penggabungan surat.ayat
+            self.staging_data['surat_ayat'] = self.staging_data['aq_surat_id'].astype(str) + '.' + self.staging_data['surat_ayat_no'].astype(str)
+            self.total_ayat = len(self.staging_data)
+            
+            print(f"[OK] Filter Data Siap: Total {self.total_ayat} ayat.")
+            return self.staging_data
+        except Exception as e:
+            print(f"[ERROR] Error saat filtering data: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def set_metode(self, metode="T111"):
         """
@@ -77,7 +96,7 @@ class PengolahDataJBAH:
         N = self.total_ayat
         self.p1_dict = {}
         
-        # 1. Menentukan Titik Tengah
+        # 1. Menentukan Titik Tengah (Dari data yang sudah digeser siklik)
         if N % 2 == 0:
             mid_left = N // 2 - 1
             mid_right = N // 2
@@ -99,7 +118,10 @@ class PengolahDataJBAH:
             ('E', 'e', 5), ('G', 'g', 1)
         ]
 
+        # Ekstraksi blok simetris
         for left_lbl, right_lbl, width in met1_widths:
+            # Karena data sudah di-shift, kita tidak akan pernah out-of-bounds 
+            # untuk lebar standar 98 ayat.
             left_chunk = self.staging_data_met.loc[left_idx - width + 1 : left_idx, 'surat_ayat'].tolist()
             right_chunk = self.staging_data_met.loc[right_idx : right_idx + width - 1, 'surat_ayat'].tolist()
             
@@ -140,6 +162,7 @@ class PengolahDataJBAH:
                     
         self.df_p3 = pd.DataFrame(flat_data, columns=['p3_id', 'Label', 'Ayat'])
         
+        # Ekstraksi Variabel AT-H & AT-AH
         try:
             self.at_h = self.df_p3.loc[38, 'Ayat'] # p3_id 39
             self.at_ah = self.df_p3.loc[49, 'Ayat'] # p3_id 50 (Dhzo)
@@ -177,14 +200,14 @@ class PengolahDataJBAH:
 
     def generate_tabel_ah_final(self):
         """Tahap II.2.5: Tabel Asmaul Husna"""
-        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'I', 'II', 'III', 'Iv', 'V', 'VI', 'VII']
+        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'I', 'II', 'III', 'IV', 'v', 'VI', 'VII']
         arab_chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ھ', 'لا', 'ء', 'ي', 'ال', 'ة', 'هؤ']
         
         baris_final: List[List[Any]] = []
-        baris_final.append([self.concept_label, None, None, None, None, None, None, None, None, None])
-        baris_final.append([None, self.metode_aktif, None, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None])
-        baris_final.append(['Latin & Hari', None, None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
-        baris_final.append(['Latin', 'No AH', 'Ayat #3', 'No AH', 'Ayat #4', 'No AH', 'Ayat #2', 'No AH', 'Ayat #1', 'Arab'])
+        baris_final.append(['Konsep Dasar metode per ayat', None, None, None, None, None, None, None, None, None])
+        baris_final.append([None, self.metode_aktif, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None, None])
+        baris_final.append([None, 'Latin & Hari', None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
+        baris_final.append(['Latin', 'No', 'Ayat #3', 'No', 'Ayat #4', 'No', 'Ayat #2', 'No', 'Ayat #1', 'Arab'])
         
         for i in range(1, 34):
             idx_1 = 3 * i - 2
@@ -207,21 +230,18 @@ class PengolahDataJBAH:
         self.df_final = pd.DataFrame(baris_final, columns=kolom)
 
     def export_excel(self, output_name, jenis="advance"):
-        """Ekspor hasil ke file Excel melalui modul output terpisah."""
-        return ExcelExporter.export(self, output_name, jenis=jenis, signature_text=self.signature_text)
-
-
-class ExcelExporter:
-    """Wrapper yang jelas untuk operasi Excel dan styling output."""
-
-    @staticmethod
-    def export(processor, output_name, jenis="advance", signature_text=None):
-        return export_and_format_output(
-            processor,
-            output_name,
-            jenis=jenis,
-            signature_text=signature_text or processor.signature_text,
-        )
+        """Ekspor hasil ke file Excel"""
+        with pd.ExcelWriter(output_name, engine='openpyxl') as writer:
+            if jenis == "advance":
+                self.df_init.to_excel(writer, sheet_name='Init', index=False)
+                self.df_p1.to_excel(writer, sheet_name='Proses 1', index=False)
+                self.df_p2.to_excel(writer, sheet_name='Proses 2', index=False)
+                self.df_p3.to_excel(writer, sheet_name='Proses 3', index=False)
+                self.df_final.to_excel(writer, sheet_name='Final', index=False)
+            else:
+                self.df_init.to_excel(writer, sheet_name='Init', index=False)
+                self.df_final.to_excel(writer, sheet_name='Final', index=False)
+        print(f"[OK] File {self.metode_aktif} disimpan sebagai: {output_name}")
 
 # ==========================================
 # --- SIMULASI EKSEKUSI MULTI-METODE ---
@@ -229,33 +249,40 @@ class ExcelExporter:
 if __name__ == "__main__":
     print("--- MEMULAI PENGOLAH DATA JBAH (ALL METHODS) ---")
     
+    # Get script directory to handle paths correctly
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    
     FILE_MENTAH = os.path.join(script_dir, "datasource", "Struktur Quran18.xlsx")
     KOLOM_FILTER = "aq_juz_id"
-    NILAI_FILTER = 1  
+    NILAI_FILTER = 1  # Ganti sesuai Juz yang ingin dites
     JENIS_OUTPUT = "advance"
     
-    concept_label = input("Masukkan label konsep dasar (default: Konsep Dasar (metode jumlah ayat dalam juz)): ").strip() or "Konsep Dasar (metode jumlah ayat dalam juz)"
-    signature_text = input("Masukkan tanda tangan / penandatangan (default: Digital Signature): ").strip() or "Digital Signature"
-    app = PengolahDataJBAH(FILE_MENTAH, concept_label=concept_label, signature_text=signature_text)
+    app = PengolahDataJBAH(FILE_MENTAH)
     
     if app.raw_data is not None:
+        # 1. Lakukan Filter Data Utama (Hanya perlu sekali)
         app.filter_data(KOLOM_FILTER, NILAI_FILTER)
         
+        # 2. Iterasi untuk memproses T111, T222, dan T333
         daftar_metode = ["T111", "T222", "T333"]
         
+        # Create dataoutput directory if it doesn't exist
         output_dir = os.path.join(script_dir, "dataoutput")
         os.makedirs(output_dir, exist_ok=True)
         
         for metode in daftar_metode:
             NAMA_FILE_OUTPUT = os.path.join(output_dir, f"Output_JBAH_Juz{NILAI_FILTER}_{metode}.xlsx")
             
+            # Terapkan metode (shifting data)
             app.set_metode(metode)
+            
+            # Jalankan Pipeline (Tanpa perlu ubah logika Proses!)
             app.proses_1_dan_2()
             app.proses_3()
             app.generate_tabel_jb_init()
             app.generate_tabel_ah_final()
             
+            # Ekspor File (Setiap metode dipisah ke filenya masing-masing)
             app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
             
     print("\n[OK] SELURUH PROSES SELESAI")
