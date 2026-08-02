@@ -1,2 +1,2 @@
 # strukturabjad
-Automasi perhitungan struktur abjad pada kajian Tafsir Luqman
+Automasi perhitungan struktur abjad
