@@ -12,3 +12,4 @@ testoutput/
 git_status.txt
 rawahaq_expanded.xlsx
 datasource/rawahaq.xlsx
+.continue/

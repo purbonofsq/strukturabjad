@@ -229,43 +229,47 @@ class PengolahDataJBAH:
         kolom = ['TABEL ASMAUL HUSNA', None, None, None, None, None, None, None, None, None]
         self.df_final = pd.DataFrame(baris_final, columns=kolom)
 
-    def export_excel(self, output_name, jenis="advance"):
-        """Ekspor hasil ke file Excel melalui modul output terpisah."""
-        return export_and_format_output(self, output_name, jenis=jenis, signature_text=self.signature_text)
+# backend1.py (potongan yang dimodifikasi untuk fungsi export_excel dan __main__)
+# backend1.py (potongan yang dimodifikasi)
+# ... (kode sebelumnya sama)
+
+    def export_excel(self, output_name, jenis="advance", format="excel"):
+        """Ekspor hasil ke file Excel atau HTML melalui modul output terpisah."""
+        return export_and_format_output(self, output_name, jenis=jenis, format=format, signature_text=self.signature_text)
 
 # ==========================================
 # --- SIMULASI EKSEKUSI MULTI-METODE ---
 # ==========================================
+
 if __name__ == "__main__":
     print("--- MEMULAI PENGOLAH DATA JBAH (ALL METHODS) ---")
-    
     script_dir = os.path.dirname(os.path.abspath(__file__))
     FILE_MENTAH = os.path.join(script_dir, "datasource", "Struktur Quran18.xlsx")
     KOLOM_FILTER = "aq_juz_id"
-    NILAI_FILTER = 1  
-    JENIS_OUTPUT = "advance"
-    
+    NILAI_FILTER = 1
+    # Ganti default jenis dan format sesuai kebutuhan
+    JENIS_OUTPUT = "pengguna"  # Misalnya, defaultnya "pengguna"
+    FORMAT_OUTPUT = "excel"    # Misalnya, defaultnya "excel"
+
     concept_label = input("Masukkan label konsep dasar (default: Konsep Dasar (metode jumlah ayat dalam juz)): ").strip() or "Konsep Dasar (metode jumlah ayat dalam juz)"
     signature_text = input("Masukkan tanda tangan / penandatangan (default: Digital Signature): ").strip() or "Digital Signature"
+
     app = PengolahDataJBAH(FILE_MENTAH, concept_label=concept_label, signature_text=signature_text)
-    
     if app.raw_data is not None:
         app.filter_data(KOLOM_FILTER, NILAI_FILTER)
-        
         daftar_metode = ["T111", "T222", "T333"]
-        
         output_dir = os.path.join(script_dir, "dataoutput")
         os.makedirs(output_dir, exist_ok=True)
-        
         for metode in daftar_metode:
-            NAMA_FILE_OUTPUT = os.path.join(output_dir, f"Output_JBAH_Juz{NILAI_FILTER}_{metode}.xlsx")
-            
+            # Gunakan ekstensi yang benar berdasarkan format
+            ext = ".html" if FORMAT_OUTPUT.lower() == "html" else ".xlsx"
+            NAMA_FILE_OUTPUT = os.path.join(output_dir, f"Output_JBAH_Juz{NILAI_FILTER}_{metode}{ext}")
             app.set_metode(metode)
             app.proses_1_dan_2()
             app.proses_3()
             app.generate_tabel_jb_init()
             app.generate_tabel_ah_final()
-            
-            app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
-            
+            # Panggil export dengan jenis dan format
+            app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT, format=FORMAT_OUTPUT)
+
     print("\n[OK] SELURUH PROSES SELESAI")
