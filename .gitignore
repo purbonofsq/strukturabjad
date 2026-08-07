@@ -10,6 +10,8 @@ tabelahaq/
 tabeldasar/
 testoutput/
 git_status.txt
-rawahaq_expanded.xlsx
-datasource/rawahaq.xlsx
+# rawahaq_expanded.xlsx
+# datasource/
 .continue/
+HitungHuruf_Mim/
+HitungHuruf_Wau/

@@ -192,10 +192,10 @@ class PengolahDataJBAH:
             [f"Ayat AT-H {self.metode_aktif}", self.at_h, None, None, None, None],
             [f"Ayat AT-Juz {self.metode_aktif}", self.titik_tengah, None, None, None, None],
             [f"Ayat AT-AH {self.metode_aktif}", self.at_ah, None, None, None, None],
-            ["Total Ayat", f"{self.total_ayat} ayat", None, None, None, None]
+            ["Total Ayat(Huruf)", f"{self.total_ayat} ayat(huruf)", None, None, None, None]
         ]
         
-        kolom = [f'Tabel JB {self.metode_aktif} Juz {self.NILAI_FILTER}', 'Ayat1', 'Ayat2', 'Ayat3', 'Ayat4', 'Ayat5']
+        kolom = [f'Tabel Jabal Nur {self.metode_aktif} Juz {self.NILAI_FILTER}', 'Ayat1', 'Ayat2', 'Ayat3', 'Ayat4', 'Ayat5']
         self.df_init = pd.DataFrame(tabel_jb_data[1:], columns=kolom)
 
     def generate_tabel_ah_final(self):
@@ -252,7 +252,7 @@ if __name__ == "__main__":
     FORMAT_OUTPUT = "excel"    # Misalnya, defaultnya "excel"
 
     concept_label = input("Masukkan label konsep dasar (default: Konsep Dasar (metode jumlah ayat dalam juz)): ").strip() or "Konsep Dasar (metode jumlah ayat dalam juz)"
-    signature_text = input("Masukkan tanda tangan / penandatangan (default: Digital Signature): ").strip() or "Digital Signature"
+    signature_text = input("Masukkan tanda tangan / penandatangan (default: Ainurrahman Cluster MDC): ").strip() or "Ainurrahman Cluster MDC"
 
     app = PengolahDataJBAH(FILE_MENTAH, concept_label=concept_label, signature_text=signature_text)
     if app.raw_data is not None:

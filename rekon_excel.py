@@ -33,7 +33,7 @@ def expand_data(input_filename='rawahaq.xlsx', output_filename='rawahaq_expanded
             # Salin baris saat ini
             new_row = row.copy()
             # Tambahkan ID unik ke salinan baris
-            new_row['ay_huruf_ain_id'] = ay_huruf_ain_id_counter
+            new_row['ay_huruf_wau_id'] = ay_huruf_ain_id_counter
             # Tambahkan salinan baris ke list hasil
             expanded_rows.append(new_row)
             # Naikkan counter ID
@@ -43,7 +43,7 @@ def expand_data(input_filename='rawahaq.xlsx', output_filename='rawahaq_expanded
     expanded_df = pd.DataFrame(expanded_rows)
 
     # Urutkan berdasarkan ID (opsional, tapi biasanya diharapkan)
-    expanded_df.sort_values(by='ay_huruf_ain_id', inplace=True, ignore_index=True)
+    expanded_df.sort_values(by='ay_huruf_wau_id', inplace=True, ignore_index=True)
 
     # Simpan DataFrame baru ke file Excel
     expanded_df.to_excel(output_path, index=False)
