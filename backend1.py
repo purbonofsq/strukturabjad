@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 from outputproc import export_and_format_output
 
 class PengolahDataJBAH:
-    def __init__(self, file_path, concept_label="Konsep Dasar (metode jumlah ayat dalam juz)", signature_text="Digital Signature"):
+    def __init__(self, file_path, concept_label="Konsep Dasar (metode jumlah ayat dalam juz)", signature_text="Ainurrahman Cluster MDC"):
         """Inisialisasi class dan memuat data mentah Excel."""
         self.file_path = file_path
         self.concept_label = concept_label
@@ -181,6 +181,8 @@ class PengolahDataJBAH:
             [f"Ayat Awal {self.metode_aktif}", self.ayat_awal, None, None, None, None],
             [f"Ayat Akhir {self.metode_aktif}", self.ayat_akhir, None, None, None, None],
             [f"Ayat Tengah {self.metode_aktif}", self.titik_tengah, None, None, None, None],
+            ["Total Ayat(Huruf)", f"{self.total_ayat} ayat(huruf)", None, None, None, None],
+            [None, None, None, None, None, None],
             [f"Ayat F {self.metode_aktif}"] + get_padded_list('F'),
             [f"Ayat A {self.metode_aktif}"] + get_padded_list('A'),
             [f"Ayat a {self.metode_aktif}"] + get_padded_list('a'),
@@ -189,10 +191,11 @@ class PengolahDataJBAH:
             [f"Ayat G {self.metode_aktif}"] + get_padded_list('G'),
             [f"Ayat e {self.metode_aktif}"] + get_padded_list('e'),
             [f"Ayat g {self.metode_aktif}"] + get_padded_list('g'),
+            [None, None, None, None, None, None],
             [f"Ayat AT-H {self.metode_aktif}", self.at_h, None, None, None, None],
             [f"Ayat AT-Juz {self.metode_aktif}", self.titik_tengah, None, None, None, None],
             [f"Ayat AT-AH {self.metode_aktif}", self.at_ah, None, None, None, None],
-            ["Total Ayat(Huruf)", f"{self.total_ayat} ayat(huruf)", None, None, None, None]
+            #["Total Ayat(Huruf)", f"{self.total_ayat} ayat(huruf)", None, None, None, None]
         ]
         
         kolom = [f'Tabel Jabal Nur {self.metode_aktif} Juz {self.NILAI_FILTER}', 'Ayat1', 'Ayat2', 'Ayat3', 'Ayat4', 'Ayat5']

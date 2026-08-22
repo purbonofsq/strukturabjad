@@ -1,0 +1,3290 @@
+
+
+========================================
+NAMA FILE: backend1.py
+========================================
+
+import os
+import pandas as pd
+import numpy as np
+from typing import Any, List, Optional
+
+from outputproc import export_and_format_output
+
+class PengolahDataJBAH:
+    def __init__(self, file_path, concept_label="Konsep Dasar (metode jumlah ayat dalam juz)", signature_text="Ainurrahman Cluster MDC"):
+        """Inisialisasi class dan memuat data mentah Excel."""
+        self.file_path = file_path
+        self.concept_label = concept_label
+        self.signature_text = signature_text
+        self.raw_data: Optional[pd.DataFrame] = None
+        try:
+            self.raw_data = pd.read_excel(self.file_path)
+            print(f"[OK] Data mentah Excel berhasil dimuat dari: {self.file_path}")
+        except Exception as e:
+            print(f"[ERROR] Error memuat data: {e}")
+            self.raw_data = None
+
+    def filter_data(self, filter_col, filter_value):
+        """Tahap II.1: Staging Data Utama (Filter dan Inisialisasi Dasar)"""
+        if self.raw_data is None:
+            print("[ERROR] raw_data is None, cannot filter.")
+            return None
+
+        try:
+            # Check if filter column exists
+            if filter_col not in self.raw_data.columns:
+                print(f"[ERROR] Kolom '{filter_col}' tidak ditemukan di data. Kolom yang tersedia: {list(self.raw_data.columns)}")
+                return None
+
+            self.NILAI_FILTER = filter_value
+            self.staging_data = self.raw_data[self.raw_data[filter_col] == filter_value].copy()
+            
+            # Check if any rows were found
+            if len(self.staging_data) == 0:
+                unique_values = self.raw_data[filter_col].unique()
+                print(f"[ERROR] Tidak ada data untuk {filter_col} = {filter_value}. Nilai yang tersedia: {sorted(unique_values)}")
+                return None
+
+            self.staging_data.reset_index(drop=True, inplace=True)
+            
+            # Membuat string penggabungan surat.ayat
+            self.staging_data['surat_ayat'] = self.staging_data['aq_surat_id'].astype(str) + '.' + self.staging_data['surat_ayat_no'].astype(str)
+            self.total_ayat = len(self.staging_data)
+            
+            print(f"[OK] Filter Data Siap: Total {self.total_ayat} ayat.")
+            return self.staging_data
+        except Exception as e:
+            print(f"[ERROR] Error saat filtering data: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def set_metode(self, metode="T111"):
+        """
+        Tahap Penentuan Poros (Metode Siklik):
+        Menggeser (shifting) array data agar target Blok F jatuh tepat di tengah.
+        """
+        self.metode_aktif = metode
+        N = self.total_ayat
+        
+        # 1. Tentukan posisi tengah absolut dari array
+        if N % 2 == 0:
+            center_pos = N // 2 - 1  # Indeks kiri dari 2 ayat tengah
+        else:
+            center_pos = N // 2
+            
+        # 2. Tentukan target indeks asli yang ingin dijadikan Blok F
+        if metode == "T111":
+            target_f_idx = center_pos 
+        elif metode == "T222":
+            target_f_idx = 0  # Poros di awal
+        elif metode == "T333":
+            if N % 2 == 0:
+                target_f_idx = N - 2  # Poros di akhir (2 ayat)
+            else:
+                target_f_idx = N - 1  # Poros di akhir (1 ayat)
+        else:
+            target_f_idx = center_pos # Default
+            
+        # 3. Hitung offset dan geser data secara sirkular (Modulo)
+        # Mencari indeks awal (0) baru agar target_f_idx jatuh tepat di center_pos
+        start_idx = (target_f_idx - center_pos) % N
+        new_order = [(start_idx + i) % N for i in range(N)]
+        
+        self.staging_data_met = self.staging_data.iloc[new_order].copy()
+        self.staging_data_met.reset_index(drop=True, inplace=True)
+        
+        # 4. Update Pelaporan Dasar berdasarkan poros baru
+        self.ayat_awal = self.staging_data_met.loc[0, 'surat_ayat']
+        self.ayat_akhir = self.staging_data_met.loc[N - 1, 'surat_ayat']
+        
+        print(f"\n[INFO] Set Metode: {metode} | Ayat Awal Baru: {self.ayat_awal} | Ayat Akhir Baru: {self.ayat_akhir}")
+
+    def proses_1_dan_2(self):
+        """Tahap II.2.1 & II.2.2: Chunking Baku & Symmetrical Reordering"""
+        N = self.total_ayat
+        self.p1_dict = {}
+        
+        # 1. Menentukan Titik Tengah
+        if N % 2 == 0:
+            mid_left = N // 2 - 1
+            mid_right = N // 2
+            self.titik_tengah = f"{self.staging_data_met.loc[mid_left, 'surat_ayat']}+{self.staging_data_met.loc[mid_right, 'surat_ayat']}"
+            left_idx = mid_left - 1
+            right_idx = mid_right + 1
+        else:
+            mid = N // 2
+            self.titik_tengah = self.staging_data_met.loc[mid, 'surat_ayat']
+            left_idx = mid - 1
+            right_idx = mid + 1
+            
+        self.p1_dict['F'] = [self.titik_tengah]
+
+        # 2. Template Baku Lebar Sayap (Mekar ke luar)
+        met1_widths = [
+            ('A', 'a', 5), ('B', 'b', 7), ('C1', 'c1', 7), ('C2', 'c2', 7),
+            ('D1', 'd1', 7), ('D2', 'd2', 7), ('D3', 'd3', 9),
+            ('E', 'e', 5), ('G', 'g', 1)
+        ]
+
+        for left_lbl, right_lbl, width in met1_widths:
+            left_chunk = self.staging_data_met.loc[left_idx - width + 1 : left_idx, 'surat_ayat'].tolist()
+            right_chunk = self.staging_data_met.loc[right_idx : right_idx + width - 1, 'surat_ayat'].tolist()
+            
+            self.p1_dict[left_lbl] = left_chunk
+            self.p1_dict[right_lbl] = right_chunk
+            
+            left_idx -= width
+            right_idx += width
+
+        # 3. Merakit DataFrame Proses 1
+        order_p1 = ['G', 'E', 'D3', 'D2', 'D1', 'C2', 'C1', 'B', 'A', 'F', 'a', 'b', 'c1', 'c2', 'd1', 'd2', 'd3', 'e', 'g']
+        df_p1 = pd.DataFrame(dict([(k, pd.Series(self.p1_dict.get(k, []))) for k in order_p1])).T
+        df_p1.reset_index(inplace=True)
+        df_p1.columns = ['Label'] + [f'Ayat {i+1}' for i in range(df_p1.shape[1]-1)]
+        self.df_p1 = df_p1
+
+        # 4. Merakit DataFrame Proses 2 (Reordering Eksklusif 15 Blok)
+        order_p2 = ['F', 'A', 'a', 'B', 'b', 'C2', 'C1', 'c1', 'c2', 'D3', 'D2', 'D1', 'd1', 'd2', 'd3']
+        df_p2 = pd.DataFrame(dict([(k, pd.Series(self.p1_dict.get(k, []))) for k in order_p2])).T
+        df_p2.reset_index(inplace=True)
+        df_p2.columns = ['Label'] + [f'Ayat {i+1}' for i in range(df_p2.shape[1]-1)]
+        self.df_p2 = df_p2
+        
+        print(f"[OK] Proses 1 & Proses 2 ({self.metode_aktif}) Selesai.")
+
+    def proses_3(self):
+        """Tahap II.2.3: Flattening, Merger & Indexing Mutlak"""
+        flat_data = []
+        p3_id_counter = 1
+        
+        for idx, row in self.df_p2.iterrows():
+            label = row['Label']
+            for col in self.df_p2.columns[1:]:
+                ayat = row[col]
+                if pd.notna(ayat):
+                    flat_data.append([p3_id_counter, label, ayat])
+                    p3_id_counter += 1
+                    
+        self.df_p3 = pd.DataFrame(flat_data, columns=['p3_id', 'Label', 'Ayat'])
+        
+        try:
+            self.at_h = self.df_p3.loc[38, 'Ayat'] # p3_id 39
+            self.at_ah = self.df_p3.loc[49, 'Ayat'] # p3_id 50 (Dhzo)
+        except KeyError:
+            self.at_h = "Index Tidak Ditemukan"
+            self.at_ah = "Index Tidak Ditemukan"
+
+    def generate_tabel_jb_init(self):
+        """Tahap II.2.4: Dashboard JB (Init)"""
+        def get_padded_list(label, length=5):
+            lst = self.p1_dict.get(label, [])
+            return lst + [None] * (length - len(lst))
+
+        tabel_jb_data = [
+            ["Variabel", "Ayat1", "Ayat2", "Ayat3", "Ayat4", "Ayat5"],
+            [f"Ayat Awal {self.metode_aktif}", self.ayat_awal, None, None, None, None],
+            [f"Ayat Akhir {self.metode_aktif}", self.ayat_akhir, None, None, None, None],
+            [f"Ayat Tengah {self.metode_aktif}", self.titik_tengah, None, None, None, None],
+            [f"Ayat F {self.metode_aktif}"] + get_padded_list('F'),
+            [f"Ayat A {self.metode_aktif}"] + get_padded_list('A'),
+            [f"Ayat a {self.metode_aktif}"] + get_padded_list('a'),
+            [f"Ayat Dhzo {self.metode_aktif}", self.at_ah, None, None, None, None],
+            [f"Ayat E {self.metode_aktif}"] + get_padded_list('E'),
+            [f"Ayat G {self.metode_aktif}"] + get_padded_list('G'),
+            [f"Ayat e {self.metode_aktif}"] + get_padded_list('e'),
+            [f"Ayat g {self.metode_aktif}"] + get_padded_list('g'),
+            [f"Ayat AT-H {self.metode_aktif}", self.at_h, None, None, None, None],
+            [f"Ayat AT-Juz {self.metode_aktif}", self.titik_tengah, None, None, None, None],
+            [f"Ayat AT-AH {self.metode_aktif}", self.at_ah, None, None, None, None],
+            ["Total Ayat(Huruf)", f"{self.total_ayat} ayat(huruf)", None, None, None, None]
+        ]
+        
+        kolom = [f'Tabel Jabal Nur {self.metode_aktif} Juz {self.NILAI_FILTER}', 'Ayat1', 'Ayat2', 'Ayat3', 'Ayat4', 'Ayat5']
+        self.df_init = pd.DataFrame(tabel_jb_data[1:], columns=kolom)
+
+    def generate_tabel_ah_final(self):
+        """Tahap II.2.5: Tabel Asmaul Husna"""
+        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'I', 'II', 'III', 'Iv', 'V', 'VI', 'VII']
+        arab_chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ھ', 'لا', 'ء', 'ي', 'ال', 'ة', 'هؤ']
+        
+        baris_final: List[List[Any]] = []
+        baris_final.append([self.concept_label, None, None, None, None, None, None, None, None, None])
+        baris_final.append([None, self.metode_aktif, None, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None])
+        baris_final.append(['Latin & Hari', None, None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
+        baris_final.append(['Latin', 'No AH', 'Ayat #3', 'No AH', 'Ayat #4', 'No AH', 'Ayat #2', 'No AH', 'Ayat #1', 'Arab'])
+        
+        for i in range(1, 34):
+            idx_1 = 3 * i - 2
+            idx_2 = 3 * i - 1
+            idx_3 = 3 * i
+            idx_4 = 101 - idx_3
+            
+            ayat1 = self.df_p3.loc[idx_1 - 1, 'Ayat'] if idx_1 <= len(self.df_p3) else None
+            ayat2 = self.df_p3.loc[idx_2 - 1, 'Ayat'] if idx_2 <= len(self.df_p3) else None
+            ayat3 = self.df_p3.loc[idx_3 - 1, 'Ayat'] if idx_3 <= len(self.df_p3) else None
+            ayat4 = self.df_p3.loc[idx_4 - 1, 'Ayat'] if idx_4 <= len(self.df_p3) else None
+            
+            huruf_latin = latin_chars[i-1]
+            huruf_arab = arab_chars[i-1]
+            
+            baris = [huruf_latin, idx_3, ayat3, idx_4, ayat4, idx_2, ayat2, idx_1, ayat1, huruf_arab]
+            baris_final.append(baris)
+
+        kolom = ['TABEL ASMAUL HUSNA', None, None, None, None, None, None, None, None, None]
+        self.df_final = pd.DataFrame(baris_final, columns=kolom)
+
+# backend1.py (potongan yang dimodifikasi untuk fungsi export_excel dan __main__)
+# backend1.py (potongan yang dimodifikasi)
+# ... (kode sebelumnya sama)
+
+    def export_excel(self, output_name, jenis="advance", format="excel"):
+        """Ekspor hasil ke file Excel atau HTML melalui modul output terpisah."""
+        return export_and_format_output(self, output_name, jenis=jenis, format=format, signature_text=self.signature_text)
+
+# ==========================================
+# --- SIMULASI EKSEKUSI MULTI-METODE ---
+# ==========================================
+
+if __name__ == "__main__":
+    print("--- MEMULAI PENGOLAH DATA JBAH (ALL METHODS) ---")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    FILE_MENTAH = os.path.join(script_dir, "datasource", "Struktur Quran18.xlsx")
+    KOLOM_FILTER = "aq_juz_id"
+    NILAI_FILTER = 1
+    # Ganti default jenis dan format sesuai kebutuhan
+    JENIS_OUTPUT = "pengguna"  # Misalnya, defaultnya "pengguna"
+    FORMAT_OUTPUT = "excel"    # Misalnya, defaultnya "excel"
+
+    concept_label = input("Masukkan label konsep dasar (default: Konsep Dasar (metode jumlah ayat dalam juz)): ").strip() or "Konsep Dasar (metode jumlah ayat dalam juz)"
+    signature_text = input("Masukkan tanda tangan / penandatangan (default: Ainurrahman Cluster MDC): ").strip() or "Ainurrahman Cluster MDC"
+
+    app = PengolahDataJBAH(FILE_MENTAH, concept_label=concept_label, signature_text=signature_text)
+    if app.raw_data is not None:
+        app.filter_data(KOLOM_FILTER, NILAI_FILTER)
+        daftar_metode = ["T111", "T222", "T333"]
+        output_dir = os.path.join(script_dir, "dataoutput")
+        os.makedirs(output_dir, exist_ok=True)
+        for metode in daftar_metode:
+            # Gunakan ekstensi yang benar berdasarkan format
+            ext = ".html" if FORMAT_OUTPUT.lower() == "html" else ".xlsx"
+            NAMA_FILE_OUTPUT = os.path.join(output_dir, f"Output_JBAH_Juz{NILAI_FILTER}_{metode}{ext}")
+            app.set_metode(metode)
+            app.proses_1_dan_2()
+            app.proses_3()
+            app.generate_tabel_jb_init()
+            app.generate_tabel_ah_final()
+            # Panggil export dengan jenis dan format
+            app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT, format=FORMAT_OUTPUT)
+
+    print("\n[OK] SELURUH PROSES SELESAI")
+
+
+========================================
+NAMA FILE: backend2.py
+========================================
+
+import os
+import pandas as pd
+import numpy as np
+from typing import Any, List, Optional
+
+class PengolahDataJBAH:
+    def __init__(self, file_path):
+        """Inisialisasi class dan memuat data mentah Excel."""
+        self.file_path = file_path
+        self.raw_data: Optional[pd.DataFrame] = None
+        try:
+            self.raw_data = pd.read_excel(self.file_path)
+            print(f"[OK] Data mentah Excel berhasil dimuat dari: {self.file_path}")
+        except Exception as e:
+            print(f"[ERROR] Error memuat data: {e}")
+            self.raw_data = None
+
+    def filter_data(self, filter_col, filter_value):
+        """Tahap II.1: Staging Data Utama (Filter dan Inisialisasi Dasar)"""
+        if self.raw_data is None:
+            print("[ERROR] raw_data is None, cannot filter.")
+            return None
+
+        try:
+            # Check if filter column exists
+            if filter_col not in self.raw_data.columns:
+                print(f"[ERROR] Kolom '{filter_col}' tidak ditemukan di data. Kolom yang tersedia: {list(self.raw_data.columns)}")
+                return None
+
+            self.NILAI_FILTER = filter_value
+            self.staging_data = self.raw_data[self.raw_data[filter_col] == filter_value].copy()
+            
+            # Check if any rows were found
+            if len(self.staging_data) == 0:
+                unique_values = self.raw_data[filter_col].unique()
+                print(f"[ERROR] Tidak ada data untuk {filter_col} = {filter_value}. Nilai yang tersedia: {sorted(unique_values)}")
+                return None
+
+            self.staging_data.reset_index(drop=True, inplace=True)
+            
+            # Membuat string penggabungan surat.ayat
+            self.staging_data['surat_ayat'] = self.staging_data['aq_surat_id'].astype(str) + '.' + self.staging_data['surat_ayat_no'].astype(str)
+            self.total_ayat = len(self.staging_data)
+            
+            print(f"[OK] Filter Data Siap: Total {self.total_ayat} ayat.")
+            return self.staging_data
+        except Exception as e:
+            print(f"[ERROR] Error saat filtering data: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def set_metode(self, metode="T111"):
+        """
+        Tahap Penentuan Poros (Metode Siklik):
+        Menggeser (shifting) array data agar target Blok F jatuh tepat di tengah.
+        """
+        self.metode_aktif = metode
+        N = self.total_ayat
+        
+        # 1. Tentukan posisi tengah absolut dari array
+        if N % 2 == 0:
+            center_pos = N // 2 - 1  # Indeks kiri dari 2 ayat tengah
+        else:
+            center_pos = N // 2
+            
+        # 2. Tentukan target indeks asli yang ingin dijadikan Blok F
+        if metode == "T111":
+            target_f_idx = center_pos 
+        elif metode == "T222":
+            target_f_idx = 0  # Poros di awal
+        elif metode == "T333":
+            if N % 2 == 0:
+                target_f_idx = N - 2  # Poros di akhir (2 ayat)
+            else:
+                target_f_idx = N - 1  # Poros di akhir (1 ayat)
+        else:
+            target_f_idx = center_pos # Default
+            
+        # 3. Hitung offset dan geser data secara sirkular (Modulo)
+        # Mencari indeks awal (0) baru agar target_f_idx jatuh tepat di center_pos
+        start_idx = (target_f_idx - center_pos) % N
+        new_order = [(start_idx + i) % N for i in range(N)]
+        
+        self.staging_data_met = self.staging_data.iloc[new_order].copy()
+        self.staging_data_met.reset_index(drop=True, inplace=True)
+        
+        # 4. Update Pelaporan Dasar berdasarkan poros baru
+        self.ayat_awal = self.staging_data_met.loc[0, 'surat_ayat']
+        self.ayat_akhir = self.staging_data_met.loc[N - 1, 'surat_ayat']
+        
+        print(f"\n[INFO] Set Metode: {metode} | Ayat Awal Baru: {self.ayat_awal} | Ayat Akhir Baru: {self.ayat_akhir}")
+
+    def proses_1_dan_2(self):
+        """Tahap II.2.1 & II.2.2: Chunking Baku & Symmetrical Reordering"""
+        N = self.total_ayat
+        self.p1_dict = {}
+        
+        # 1. Menentukan Titik Tengah (Dari data yang sudah digeser siklik)
+        if N % 2 == 0:
+            mid_left = N // 2 - 1
+            mid_right = N // 2
+            self.titik_tengah = f"{self.staging_data_met.loc[mid_left, 'surat_ayat']}+{self.staging_data_met.loc[mid_right, 'surat_ayat']}"
+            left_idx = mid_left - 1
+            right_idx = mid_right + 1
+        else:
+            mid = N // 2
+            self.titik_tengah = self.staging_data_met.loc[mid, 'surat_ayat']
+            left_idx = mid - 1
+            right_idx = mid + 1
+            
+        self.p1_dict['F'] = [self.titik_tengah]
+
+        # 2. Template Baku Lebar Sayap (Mekar ke luar)
+        met1_widths = [
+            ('A', 'a', 5), ('B', 'b', 7), ('C1', 'c1', 7), ('C2', 'c2', 7),
+            ('D1', 'd1', 7), ('D2', 'd2', 7), ('D3', 'd3', 9),
+            ('E', 'e', 5), ('G', 'g', 1)
+        ]
+
+        # Ekstraksi blok simetris
+        for left_lbl, right_lbl, width in met1_widths:
+            # Karena data sudah di-shift, kita tidak akan pernah out-of-bounds 
+            # untuk lebar standar 98 ayat.
+            left_chunk = self.staging_data_met.loc[left_idx - width + 1 : left_idx, 'surat_ayat'].tolist()
+            right_chunk = self.staging_data_met.loc[right_idx : right_idx + width - 1, 'surat_ayat'].tolist()
+            
+            self.p1_dict[left_lbl] = left_chunk
+            self.p1_dict[right_lbl] = right_chunk
+            
+            left_idx -= width
+            right_idx += width
+
+        # 3. Merakit DataFrame Proses 1
+        order_p1 = ['G', 'E', 'D3', 'D2', 'D1', 'C2', 'C1', 'B', 'A', 'F', 'a', 'b', 'c1', 'c2', 'd1', 'd2', 'd3', 'e', 'g']
+        df_p1 = pd.DataFrame(dict([(k, pd.Series(self.p1_dict.get(k, []))) for k in order_p1])).T
+        df_p1.reset_index(inplace=True)
+        df_p1.columns = ['Label'] + [f'Ayat {i+1}' for i in range(df_p1.shape[1]-1)]
+        self.df_p1 = df_p1
+
+        # 4. Merakit DataFrame Proses 2 (Reordering Eksklusif 15 Blok)
+        order_p2 = ['F', 'A', 'a', 'B', 'b', 'C2', 'C1', 'c1', 'c2', 'D3', 'D2', 'D1', 'd1', 'd2', 'd3']
+        df_p2 = pd.DataFrame(dict([(k, pd.Series(self.p1_dict.get(k, []))) for k in order_p2])).T
+        df_p2.reset_index(inplace=True)
+        df_p2.columns = ['Label'] + [f'Ayat {i+1}' for i in range(df_p2.shape[1]-1)]
+        self.df_p2 = df_p2
+        
+        print(f"[OK] Proses 1 & Proses 2 ({self.metode_aktif}) Selesai.")
+
+    def proses_3(self):
+        """Tahap II.2.3: Flattening, Merger & Indexing Mutlak"""
+        flat_data = []
+        p3_id_counter = 1
+        
+        for idx, row in self.df_p2.iterrows():
+            label = row['Label']
+            for col in self.df_p2.columns[1:]:
+                ayat = row[col]
+                if pd.notna(ayat):
+                    flat_data.append([p3_id_counter, label, ayat])
+                    p3_id_counter += 1
+                    
+        self.df_p3 = pd.DataFrame(flat_data, columns=['p3_id', 'Label', 'Ayat'])
+        
+        # Ekstraksi Variabel AT-H & AT-AH
+        try:
+            self.at_h = self.df_p3.loc[38, 'Ayat'] # p3_id 39
+            self.at_ah = self.df_p3.loc[49, 'Ayat'] # p3_id 50 (Dhzo)
+        except KeyError:
+            self.at_h = "Index Tidak Ditemukan"
+            self.at_ah = "Index Tidak Ditemukan"
+
+    def generate_tabel_jb_init(self):
+        """Tahap II.2.4: Dashboard JB (Init)"""
+        def get_padded_list(label, length=5):
+            lst = self.p1_dict.get(label, [])
+            return lst + [None] * (length - len(lst))
+
+        tabel_jb_data = [
+            ["Variabel", "Ayat1", "Ayat2", "Ayat3", "Ayat4", "Ayat5"],
+            [f"Ayat Awal {self.metode_aktif}", self.ayat_awal, None, None, None, None],
+            [f"Ayat Akhir {self.metode_aktif}", self.ayat_akhir, None, None, None, None],
+            [f"Ayat Tengah {self.metode_aktif}", self.titik_tengah, None, None, None, None],
+            [f"Ayat F {self.metode_aktif}"] + get_padded_list('F'),
+            [f"Ayat A {self.metode_aktif}"] + get_padded_list('A'),
+            [f"Ayat a {self.metode_aktif}"] + get_padded_list('a'),
+            [f"Ayat Dhzo {self.metode_aktif}", self.at_ah, None, None, None, None],
+            [f"Ayat E {self.metode_aktif}"] + get_padded_list('E'),
+            [f"Ayat G {self.metode_aktif}"] + get_padded_list('G'),
+            [f"Ayat e {self.metode_aktif}"] + get_padded_list('e'),
+            [f"Ayat g {self.metode_aktif}"] + get_padded_list('g'),
+            [f"Ayat AT-H {self.metode_aktif}", self.at_h, None, None, None, None],
+            [f"Ayat AT-Juz {self.metode_aktif}", self.titik_tengah, None, None, None, None],
+            [f"Ayat AT-AH {self.metode_aktif}", self.at_ah, None, None, None, None],
+            ["Total Ayat", f"{self.total_ayat} ayat", None, None, None, None]
+        ]
+        
+        kolom = [f'Tabel JB {self.metode_aktif} Juz {self.NILAI_FILTER}', 'Ayat1', 'Ayat2', 'Ayat3', 'Ayat4', 'Ayat5']
+        self.df_init = pd.DataFrame(tabel_jb_data[1:], columns=kolom)
+
+    def generate_tabel_ah_final(self):
+        """Tahap II.2.5: Tabel Asmaul Husna"""
+        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'I', 'II', 'III', 'IV', 'v', 'VI', 'VII']
+        arab_chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ھ', 'لا', 'ء', 'ي', 'ال', 'ة', 'هؤ']
+        
+        baris_final: List[List[Any]] = []
+        baris_final.append(['Konsep Dasar metode per ayat', None, None, None, None, None, None, None, None, None])
+        baris_final.append([None, self.metode_aktif, None, None, None, None, None, f'Juz {self.NILAI_FILTER}', None, None])
+        baris_final.append([None, 'Latin & Hari', None, 'Ayat Khusus & Titik Kesadaran', None, None, None, 'Arab & Dasar', None, None])
+        baris_final.append(['Latin', 'No', 'Ayat #3', 'No', 'Ayat #4', 'No', 'Ayat #2', 'No', 'Ayat #1', 'Arab'])
+        
+        for i in range(1, 34):
+            idx_1 = 3 * i - 2
+            idx_2 = 3 * i - 1
+            idx_3 = 3 * i
+            idx_4 = 101 - idx_3
+            
+            ayat1 = self.df_p3.loc[idx_1 - 1, 'Ayat'] if idx_1 <= len(self.df_p3) else None
+            ayat2 = self.df_p3.loc[idx_2 - 1, 'Ayat'] if idx_2 <= len(self.df_p3) else None
+            ayat3 = self.df_p3.loc[idx_3 - 1, 'Ayat'] if idx_3 <= len(self.df_p3) else None
+            ayat4 = self.df_p3.loc[idx_4 - 1, 'Ayat'] if idx_4 <= len(self.df_p3) else None
+            
+            huruf_latin = latin_chars[i-1]
+            huruf_arab = arab_chars[i-1]
+            
+            baris = [huruf_latin, idx_3, ayat3, idx_4, ayat4, idx_2, ayat2, idx_1, ayat1, huruf_arab]
+            baris_final.append(baris)
+
+        kolom = ['TABEL ASMAUL HUSNA', None, None, None, None, None, None, None, None, None]
+        self.df_final = pd.DataFrame(baris_final, columns=kolom)
+
+    def export_excel(self, output_name, jenis="advance"):
+        """Ekspor hasil ke file Excel"""
+        with pd.ExcelWriter(output_name, engine='openpyxl') as writer:
+            if jenis == "advance":
+                self.df_init.to_excel(writer, sheet_name='Init', index=False)
+                self.df_p1.to_excel(writer, sheet_name='Proses 1', index=False)
+                self.df_p2.to_excel(writer, sheet_name='Proses 2', index=False)
+                self.df_p3.to_excel(writer, sheet_name='Proses 3', index=False)
+                self.df_final.to_excel(writer, sheet_name='Final', index=False)
+            else:
+                self.df_init.to_excel(writer, sheet_name='Init', index=False)
+                self.df_final.to_excel(writer, sheet_name='Final', index=False)
+        print(f"[OK] File {self.metode_aktif} disimpan sebagai: {output_name}")
+
+# ==========================================
+# --- SIMULASI EKSEKUSI MULTI-METODE ---
+# ==========================================
+if __name__ == "__main__":
+    print("--- MEMULAI PENGOLAH DATA JBAH (ALL METHODS) ---")
+    
+    # Get script directory to handle paths correctly
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    FILE_MENTAH = os.path.join(script_dir, "datasource", "rawahaq_expanded.xlsx")
+    KOLOM_FILTER = "aq_juz_id"
+    NILAI_FILTER = 1  # Ganti sesuai Juz yang ingin dites
+    JENIS_OUTPUT = "advance"
+    
+    app = PengolahDataJBAH(FILE_MENTAH)
+    
+    if app.raw_data is not None:
+        # 1. Lakukan Filter Data Utama (Hanya perlu sekali)
+        app.filter_data(KOLOM_FILTER, NILAI_FILTER)
+        
+        # 2. Iterasi untuk memproses T111, T222, dan T333
+        daftar_metode = ["T111", "T222", "T333"]
+        
+        # Create dataoutput directory if it doesn't exist
+        output_dir = os.path.join(script_dir, "dataoutput")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        for metode in daftar_metode:
+            NAMA_FILE_OUTPUT = os.path.join(output_dir, f"Output_JBAH_AHAQ_Juz{NILAI_FILTER}_{metode}.xlsx")
+            
+            # Terapkan metode (shifting data)
+            app.set_metode(metode)
+            
+            # Jalankan Pipeline (Tanpa perlu ubah logika Proses!)
+            app.proses_1_dan_2()
+            app.proses_3()
+            app.generate_tabel_jb_init()
+            app.generate_tabel_ah_final()
+            
+            # Ekspor File (Setiap metode dipisah ke filenya masing-masing)
+            app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT)
+            
+    print("\n[OK] SELURUH PROSES SELESAI")
+
+========================================
+NAMA FILE: dataextraction.py
+========================================
+
+import os
+import pandas as pd
+
+def save_filtered_data_to_excel(df: pd.DataFrame, juz_number: int, output_folder: str = "rawprocess") -> str:
+    """
+    Simpan DataFrame yang sudah difilter ke file Excel di folder output.
+    
+    Args:
+        df: DataFrame yang berisi data ayat yang sudah difilter
+        juz_number: Nomor Juz (NILAI_FILTER)
+        output_folder: Nama folder untuk menyimpan file (default: rawprocess)
+        
+    Returns:
+        Path file Excel yang disimpan
+    """
+    # Dapatkan direktori di mana script ini berada
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(script_dir, output_folder)
+    
+    # Buat folder jika belum ada
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Buat nama file
+    output_filename = os.path.join(output_dir, f"FilteredData_Juz{juz_number}.xlsx")
+    
+    # Hapus kolom 'TextAyat' jika ada
+    if 'TextAyat' in df.columns:
+        df = df.drop(columns=['TextAyat'])
+    
+    # Simpan ke Excel
+    df.to_excel(output_filename, index=False)
+    print(f"[OK] Data untuk Juz {juz_number} disimpan ke: {output_filename}")
+    
+    return output_filename
+
+
+========================================
+NAMA FILE: export_lo_pdf_interactive.py
+========================================
+
+import os
+import sys
+import shutil
+import subprocess
+import time
+import tempfile
+from pathlib import Path
+from datetime import datetime
+
+# =========================================================
+# KONFIGURASI PROSES
+# =========================================================
+
+# True = proses juga file di dalam subfolder
+# False = hanya proses file di folder yang dipilih saja
+PROSES_SUBFOLDER = True
+
+# True = PDF lama akan ditimpa
+# False = PDF lama dilewati
+OVERWRITE_EXISTING_PDF = False
+
+# Batas waktu konversi per file (detik)
+TIMEOUT_SECONDS = 300
+
+# Jumlah percobaan ulang jika gagal
+MAX_RETRY = 2
+
+# Jika kosong, script mencari LibreOffice otomatis.
+# Jika tidak ketemu, isi path lengkap LibreOffice Anda.
+#
+# Contoh Windows:
+# LIBREOFFICE_PATH = r"C:\Program Files\LibreOffice\program\soffice.exe"
+#
+# Contoh Linux:
+# LIBREOFFICE_PATH = "/usr/bin/soffice"
+#
+# Contoh macOS:
+# LIBREOFFICE_PATH = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+LIBREOFFICE_PATH = ""
+
+# Pola file yang diproses
+PATTERNS = ["*.xlsx", "*.xls", "*.xlsm", "*.ods"]
+
+# =========================================================
+
+
+def find_libreoffice():
+    """
+    Mencari executable LibreOffice.
+    """
+    if LIBREOFFICE_PATH:
+        p = Path(LIBREOFFICE_PATH).expanduser().resolve()
+        if p.exists():
+            return p
+        raise FileNotFoundError(
+            f"LIBREOFFICE_PATH tidak ditemukan: {p}"
+        )
+
+    # Cari dari PATH
+    for name in ("soffice", "libreoffice"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+
+    candidates = []
+
+    if os.name == "nt":
+        program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+        program_files_x86 = os.environ.get(
+            "PROGRAMFILES(X86)", r"C:\Program Files (x86)"
+        )
+
+        candidates.extend([
+            Path(program_files) / "LibreOffice" / "program" / "soffice.exe",
+            Path(program_files_x86) / "LibreOffice" / "program" / "soffice.exe",
+        ])
+
+    elif sys.platform == "darwin":
+        candidates.append(
+            Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+        )
+
+    else:
+        candidates.extend([
+            Path("/usr/bin/soffice"),
+            Path("/usr/bin/libreoffice"),
+            Path("/usr/local/bin/soffice"),
+            Path("/usr/local/bin/libreoffice"),
+            Path("/snap/bin/libreoffice"),
+        ])
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(
+        "LibreOffice tidak ditemukan. "
+        "Silakan isi LIBREOFFICE_PATH di script dengan path lengkap soffice/libreoffice."
+    )
+
+
+def clean_path_string(text: str) -> str:
+    """
+    Bersihkan input path dari spasi dan tanda kutip.
+    """
+    return text.strip().strip('"').strip("'")
+
+
+def list_folders_in_cwd():
+    """
+    Ambil daftar folder yang ada di folder aktif tempat program berjalan.
+    """
+    base = Path.cwd().resolve()
+
+    try:
+        entries = list(base.iterdir())
+    except Exception:
+        entries = []
+
+    folders = []
+
+    for entry in entries:
+        try:
+            # Hanya tampilkan folder
+            # Folder tersembunyi (diawali titik) tidak ditampilkan
+            if entry.is_dir() and not entry.name.startswith("."):
+                folders.append(entry)
+        except Exception:
+            pass
+
+    folders.sort(key=lambda p: p.name.lower())
+
+    return base, folders
+
+
+def ask_input_folders():
+    """
+    Minta user memilih folder dari list,
+    atau memasukkan path folder custom.
+    """
+    base, available_folders = list_folders_in_cwd()
+
+    print("======================================================")
+    print("BATCH EXPORT EXCEL/CALC TO PDF - PYTHON + LIBREOFFICE")
+    print("======================================================")
+    print(f"Daftar folder yang tersedia di:")
+    print(f"{base}")
+    print("")
+    print("[0] . (folder aktif)")
+
+    if available_folders:
+        for i, folder in enumerate(available_folders, start=1):
+            print(f"[{i}] {folder.name}")
+    else:
+        print("(tidak ada subfolder lain di folder ini)")
+
+    print("")
+    print("Cara memilih:")
+    print("- Ketik nomor folder, contoh: 1")
+    print("- Ketik beberapa nomor, contoh: 1,3")
+    print("- Ketik path custom, contoh: D:\\ExcelFiles")
+    print("- Kombinasi nomor dan path, contoh: 1,3,D:\\ExtraFolder")
+    print("- Tekan Enter saja untuk memakai folder aktif")
+    print("")
+
+    raw = input("Pilih folder yang akan diproses:\n> ").strip()
+
+    # Jika user hanya tekan Enter, gunakan folder aktif
+    if not raw:
+        return [base]
+
+    # Dukung pemisah koma atau titik koma
+    raw = raw.replace(";", ",")
+
+    tokens = [clean_path_string(token) for token in raw.split(",")]
+
+    folders = []
+    seen = set()
+
+    for token in tokens:
+        if not token:
+            continue
+
+        # Jika user memasukkan nomor dari list
+        if token.isdigit():
+            idx = int(token)
+
+            if idx == 0:
+                selected = base
+            elif 1 <= idx <= len(available_folders):
+                selected = available_folders[idx - 1]
+            else:
+                print(f"\nERROR: Nomor pilihan tidak valid: {idx}")
+                sys.exit(1)
+
+            try:
+                selected = selected.resolve()
+            except Exception:
+                pass
+
+        # Jika user memasukkan path custom
+        else:
+            selected = Path(token).expanduser()
+
+            try:
+                selected = selected.resolve()
+            except Exception:
+                pass
+
+            if not selected.exists():
+                print(f"\nERROR: Folder tidak ditemukan: {selected}")
+                sys.exit(1)
+
+            if not selected.is_dir():
+                print(f"\nERROR: Bukan folder: {selected}")
+                sys.exit(1)
+
+        key = str(selected).lower()
+
+        if key not in seen:
+            seen.add(key)
+            folders.append(selected)
+
+    if not folders:
+        print("\nERROR: Tidak ada folder yang dipilih atau dimasukkan.")
+        sys.exit(1)
+
+    return folders
+
+
+def resolve_output_folder(raw_output: str, input_folders):
+    """
+    Tentukan folder output.
+    Jika user mengosongkan input, buat folder output default.
+    """
+    raw_output = clean_path_string(raw_output)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Jika kosong, buat default
+    if not raw_output:
+        if len(input_folders) == 1:
+            root = input_folders[0]
+
+            if root.name:
+                return root.parent / f"{root.name}_PDF"
+            else:
+                return Path.cwd() / f"PDF_Output_{timestamp}"
+        else:
+            return Path.cwd() / f"PDF_Output_{timestamp}"
+
+    p = Path(raw_output).expanduser()
+
+    # Jika user memasukkan path lengkap
+    if p.is_absolute():
+        return p.resolve()
+
+    # Jika user hanya mengetik nama folder saja
+    # dan hanya ada satu folder input,
+    # maka folder output dibuat di parent folder input.
+    #
+    # Contoh:
+    # Input folder : D:\ExcelFiles
+    # Output diisi : HasilPDF
+    # Output menjadi: D:\HasilPDF
+    #
+    # Jika ada banyak folder input, output dibuat di folder aktif Python.
+    if len(input_folders) == 1 and not any(sep in raw_output for sep in (os.sep, "/")):
+        return (input_folders[0].parent / p).resolve()
+
+    return (Path.cwd() / p).resolve()
+
+
+def is_under(path: Path, parent: Path) -> bool:
+    """
+    Cek apakah path berada di dalam parent.
+    """
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def collect_files(input_folders, recursive: bool, output_folder: Path):
+    """
+    Kumpulkan file Excel/Calc dari folder input.
+    """
+    items = []
+    seen = set()
+
+    for root in input_folders:
+        for pattern in PATTERNS:
+            if recursive:
+                iterator = root.rglob(pattern)
+            else:
+                iterator = root.glob(pattern)
+
+            for file_path in iterator:
+                if not file_path.is_file():
+                    continue
+
+                # Abaikan file temporary
+                if file_path.name.startswith("~$"):
+                    continue
+
+                # Jangan proses file yang berada di folder output,
+                # kecuali folder output memang sama dengan folder input.
+                if output_folder != root and is_under(file_path, output_folder):
+                    continue
+
+                key = str(file_path).lower()
+
+                if key in seen:
+                    continue
+
+                seen.add(key)
+                items.append((root, file_path))
+
+    items.sort(key=lambda x: str(x[1]).lower())
+    return items
+
+
+def sanitize_folder_name(name: str) -> str:
+    """
+    Bersihkan nama folder agar aman dipakai sebagai nama folder output.
+    """
+    safe = "".join(
+        c if c.isalnum() or c in ("-", "_", " ") else "_"
+        for c in name
+    ).strip()
+
+    return safe or "root"
+
+
+def get_pdf_path(
+    root: Path,
+    excel_file: Path,
+    output_folder: Path,
+    multiple_roots: bool
+):
+    """
+    Tentukan path PDF hasil konversi.
+    """
+    rel = excel_file.relative_to(root)
+
+    if multiple_roots:
+        root_name = root.name
+
+        if not root_name and root.drive:
+            root_name = root.drive.strip(":")
+
+        root_name = sanitize_folder_name(root_name)
+
+        pdf_path = output_folder / root_name / rel.with_suffix(".pdf")
+    else:
+        pdf_path = output_folder / rel.with_suffix(".pdf")
+
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+
+    return pdf_path
+
+
+def run_libreoffice(
+    soffice: Path,
+    excel_file: Path,
+    outdir: Path,
+    profile_folder: Path
+):
+    """
+    Menjalankan LibreOffice headless untuk convert satu file ke PDF.
+    """
+    cmd = [
+        str(soffice),
+        f"-env:UserInstallation={profile_folder.as_uri()}",
+        "--headless",
+        "--norestore",
+        "--nolockcheck",
+        "--nologo",
+        "--invisible",
+        "--convert-to", "pdf",
+        "--outdir", str(outdir),
+        str(excel_file),
+    ]
+
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": TIMEOUT_SECONDS,
+    }
+
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    return subprocess.run(cmd, **kwargs)
+
+
+def convert_with_retry(
+    soffice: Path,
+    excel_file: Path,
+    pdf_path: Path,
+    profile_folder: Path
+):
+    """
+    Convert file ke PDF dengan retry jika gagal.
+    """
+    last_error = ""
+
+    for attempt in range(1, MAX_RETRY + 1):
+        try:
+            result = run_libreoffice(
+                soffice=soffice,
+                excel_file=excel_file,
+                outdir=pdf_path.parent,
+                profile_folder=profile_folder
+            )
+
+            if result.returncode == 0 and pdf_path.exists():
+                return True, ""
+
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+
+            last_error = (
+                f"returncode={result.returncode}; "
+                f"stderr={stderr[:500]}; "
+                f"stdout={stdout[:200]}"
+            )
+
+        except subprocess.TimeoutExpired:
+            last_error = f"timeout setelah {TIMEOUT_SECONDS} detik"
+
+        except Exception as e:
+            last_error = str(e)
+
+        if attempt < MAX_RETRY:
+            time.sleep(2)
+
+    return False, last_error
+
+
+def main():
+    input_folders = ask_input_folders()
+
+    print("\nFolder input yang akan diproses:")
+    for folder in input_folders:
+        print(f"  - {folder}")
+
+    print("")
+    print("Masukkan folder output.")
+    print("Jika dikosongkan, akan dibuat folder output default.")
+    print("")
+
+    raw_output = input("Folder output [Enter untuk default]:\n> ")
+
+    try:
+        output_folder = resolve_output_folder(raw_output, input_folders)
+    except Exception as e:
+        print(f"\nERROR: Gagal menentukan folder output: {e}")
+        return
+
+    try:
+        output_folder.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"\nERROR: Gagal membuat folder output: {output_folder}")
+        print(e)
+        return
+
+    try:
+        soffice = find_libreoffice()
+    except Exception as e:
+        print(f"\nERROR: {e}")
+        return
+
+    profile_folder = Path(tempfile.gettempdir()) / (
+        "lo_profile_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    )
+
+    try:
+        profile_folder.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"\nERROR: Gagal membuat folder profile LibreOffice: {e}")
+        return
+
+    items = collect_files(
+        input_folders=input_folders,
+        recursive=PROSES_SUBFOLDER,
+        output_folder=output_folder
+    )
+
+    total = len(items)
+
+    if total == 0:
+        print("\nTidak ada file Excel/Calc yang ditemukan.")
+        return
+
+    log_file = output_folder / f"export_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    def log(msg):
+        print(msg)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+
+    log("======================================================")
+    log("BATCH EXPORT EXCEL/CALC TO PDF - PYTHON + LIBREOFFICE")
+    log("======================================================")
+    log(f"LibreOffice     : {soffice}")
+    log(f"Folder input    :")
+
+    for folder in input_folders:
+        log(f"  - {folder}")
+
+    log(f"Folder output   : {output_folder}")
+    log(f"Profile         : {profile_folder}")
+    log(f"Total file      : {total}")
+    log(f"Proses subfolder: {PROSES_SUBFOLDER}")
+    log(f"Overwrite PDF   : {OVERWRITE_EXISTING_PDF}")
+    log("======================================================")
+
+    success = []
+    skipped = []
+    failed = []
+
+    multiple_roots = len(input_folders) > 1
+
+    try:
+        for index, (root, excel_file) in enumerate(items, start=1):
+            pdf_path = get_pdf_path(
+                root=root,
+                excel_file=excel_file,
+                output_folder=output_folder,
+                multiple_roots=multiple_roots
+            )
+
+            try:
+                rel_name = excel_file.relative_to(root)
+            except ValueError:
+                rel_name = excel_file.name
+
+            if multiple_roots:
+                root_label = root.name
+
+                if not root_label and root.drive:
+                    root_label = root.drive.strip(":")
+
+                root_label = sanitize_folder_name(root_label)
+                display_name = f"{root_label}/{rel_name}"
+            else:
+                display_name = str(rel_name)
+
+            if pdf_path.exists() and not OVERWRITE_EXISTING_PDF:
+                skipped.append(excel_file)
+                log(f"[{index}/{total}] SKIP  : {display_name} -> PDF sudah ada")
+                continue
+
+            if pdf_path.exists() and OVERWRITE_EXISTING_PDF:
+                try:
+                    pdf_path.unlink()
+                except Exception as e:
+                    failed.append((excel_file, f"gagal hapus PDF lama: {e}"))
+                    log(f"[{index}/{total}] ERROR : {display_name} -> gagal hapus PDF lama")
+                    continue
+
+            ok, error = convert_with_retry(
+                soffice=soffice,
+                excel_file=excel_file,
+                pdf_path=pdf_path,
+                profile_folder=profile_folder
+            )
+
+            if ok:
+                success.append(excel_file)
+                log(f"[{index}/{total}] OK    : {display_name} -> {pdf_path.name}")
+            else:
+                failed.append((excel_file, error))
+                log(f"[{index}/{total}] GAGAL : {display_name} -> {error}")
+
+    except KeyboardInterrupt:
+        log("\nProses dihentikan manual oleh user.")
+
+    finally:
+        log("\n======================================================")
+        log("RINGKASAN")
+        log("======================================================")
+        log(f"Total   : {total}")
+        log(f"OK      : {len(success)}")
+        log(f"Skip    : {len(skipped)}")
+        log(f"Gagal   : {len(failed)}")
+        log(f"Log     : {log_file}")
+
+        if failed:
+            log("\nDetail file gagal:")
+            for file_path, error in failed:
+                log(f"{file_path} | {error}")
+
+
+if __name__ == "__main__":
+    main()
+
+========================================
+NAMA FILE: outputproc.py
+========================================
+
+# outputproc.py
+
+import os
+from datetime import datetime
+import pandas as pd
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
+# --- Fungsi untuk ekspor ke HTML ---
+def export_and_format_html(processor, output_name, jenis="pengguna", signature_text=None):
+    """Ekspor hasil ke file HTML."""
+    print(f"[INFO] Mengekspor ke HTML: {output_name} (jenis: {jenis})")
+
+    # Ganti NaN dengan string kosong sebelum konversi ke HTML
+    df_init_clean = processor.df_init.fillna("") if hasattr(processor, 'df_init') and processor.df_init is not None else None
+    df_p1_clean = processor.df_p1.fillna("") if hasattr(processor, 'df_p1') and processor.df_p1 is not None else None
+    df_p2_clean = processor.df_p2.fillna("") if hasattr(processor, 'df_p2') and processor.df_p2 is not None else None
+    df_p3_clean = processor.df_p3.fillna("") if hasattr(processor, 'df_p3') and processor.df_p3 is not None else None
+    df_final_clean = processor.df_final.fillna("") if hasattr(processor, 'df_final') and processor.df_final is not None else None
+
+    html_parts = []
+    # Judul Halaman
+    html_parts.append(f"<html><head><title>Output JBAH - {processor.metode_aktif}</title>")
+    # CSS Sederhana untuk styling dasar dan Final
+    html_parts.append("<style>")
+    html_parts.append("body { font-family: Arial, sans-serif; margin: 20px; }")
+    html_parts.append("h1, h2 { color: #1F497D; }")
+    html_parts.append("table { border-collapse: collapse; width: 100%; margin-bottom: 20px; table-layout: fixed; }") # table-layout: fixed; untuk lebar kolom konsisten
+    html_parts.append("th, td { border: 1px solid black; padding: 8px; text-align: center; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }") # vertical-align: middle; untuk align vertikal
+    html_parts.append("th { background-color: #1F497D; color: white; font-weight: bold; }")
+    html_parts.append("tr:nth-child(even) { background-color: #D9D9D9; }")
+    # Styling khusus untuk sheet Final (mengikuti struktur Final di Excel)
+    # Header Konsep
+    html_parts.append(".final-concept { font-size: 14pt; font-weight: bold; text-align: center; background-color: #E9F2FF; }")
+    # Header Metode/Juz
+    html_parts.append(".final-subtitle { font-size: 11pt; font-weight: bold; font-style: italic; text-align: center; background-color: #E9F2FF; }")
+    # Sub-header
+    html_parts.append(".final-sub-header { font-weight: bold; text-align: center; border: 3px solid black; }")
+    # Header kolom utama
+    html_parts.append(".final-main-header { background-color: #1F497D !important; }") # Override warna th
+    # Kolom Arab
+    html_parts.append(".final-arab-col { font-weight: bold; font-size: 12pt; }")
+    # Kolom Label (Latin, No AH)
+    html_parts.append(".final-label-col { font-weight: bold; }")
+    # Footer
+    html_parts.append(".signature-title { text-align: center; background-color: #E9F2FF; font-weight: bold; font-size: 12pt; color: #1F497D; border: 1px solid black; }")
+    html_parts.append(".signature-stamp, .signature-time { text-align: center; border: 1px solid black; }")
+    # Lebar kolom untuk tabel Final
+    html_parts.append(".final-table { width: 100%; }")
+    html_parts.append(".final-table td:nth-child(1) { width: 5%; }") # Latin
+    html_parts.append(".final-table td:nth-child(2) { width: 7%; }") # No AH
+    html_parts.append(".final-table td:nth-child(3) { width: 10%; }") # Ayat #3
+    html_parts.append(".final-table td:nth-child(4) { width: 4%; }") # No AH
+    html_parts.append(".final-table td:nth-child(5) { width: 10%; }") # Ayat #4
+    html_parts.append(".final-table td:nth-child(6) { width: 4%; }") # No AH
+    html_parts.append(".final-table td:nth-child(7) { width: 10%; }") # Ayat #2
+    html_parts.append(".final-table td:nth-child(8) { width: 7%; }") # No AH
+    html_parts.append(".final-table td:nth-child(9) { width: 15%; }") # Ayat #1
+    html_parts.append(".final-table td:nth-child(10) { width: 5%; }") # Arab
+    html_parts.append("</style>")
+    html_parts.append("</head><body>")
+
+    # --- Ekspor sheet berdasarkan jenis ---
+    if jenis == "pengguna":
+        # Hanya Init dan Final
+        # --- Sheet Init ---
+        if df_init_clean is not None and not df_init_clean.empty:
+            html_parts.append(f"<h2>Sheet: Init ({processor.metode_aktif})</h2>")
+            html_parts.append(df_init_clean.to_html(index=False, escape=False, classes='standard-table'))
+
+        # --- Sheet Final ---
+        if df_final_clean is not None and not df_final_clean.empty:
+            html_parts.append(f"<h2>Sheet: Final ({processor.metode_aktif})</h2>")
+            # Bangun tabel Final secara manual untuk kontrol lebih baik atas merging cells
+            html_parts.append('<table class="final-table">')
+            # Baris 1: Konsep Dasar (merge semua kolom)
+            html_parts.append(f'<tr class="final-concept-row"><td colspan="10" class="final-concept">{df_final_clean.iloc[0, 0]}</td></tr>')
+            # Baris 2: Metode dan Juz (merge kolom 2-10)
+            html_parts.append(f'<tr class="final-subtitle-row"><td></td><td colspan="8" class="final-subtitle">{df_final_clean.iloc[1, 1]}</td><td></td></tr>') # Kolom pertama dan terakhir kosong
+            # Baris 3: Sub Headers (merge dan styling)
+            html_parts.append('<tr class="final-sub-header">')
+            html_parts.append(f'<td colspan="3" class="final-sub-header">{df_final_clean.iloc[2, 0]}</td>') # Latin & Hari
+            html_parts.append(f'<td colspan="4" class="final-sub-header">{df_final_clean.iloc[2, 3]}</td>') # Ayat Khusus
+            html_parts.append(f'<td colspan="3" class="final-sub-header">{df_final_clean.iloc[2, 7]}</td>') # Arab & Dasar
+            html_parts.append('</tr>')
+            # Baris 4: Header Kolom Utama
+            html_parts.append('<tr class="final-main-header">')
+            for header in df_final_clean.columns:
+                html_parts.append(f'<th class="final-main-header">{header}</th>')
+            html_parts.append('</tr>')
+            # Baris Data
+            for index, row in df_final_clean.iloc[3:].iterrows(): # Lewati baris 0-2 karena sudah dihandle
+                html_parts.append('<tr>')
+                for i, cell in enumerate(row):
+                    cell_class = ""
+                    if i == 0: # Kolom Latin
+                        cell_class = "final-label-col"
+                    elif i in [1, 3, 5, 7]: # Kolom No AH
+                        cell_class = "final-label-col"
+                    elif i == 9: # Kolom Arab
+                        cell_class = "final-arab-col"
+                    html_parts.append(f'<td class="{cell_class}">{cell}</td>')
+                html_parts.append('</tr>')
+            html_parts.append('</table>')
+
+            # Tambahkan footer ke tabel Final
+            sig_text = signature_text or processor.signature_text
+            html_parts.append(f'<div class="signature-title">__</div>')
+            html_parts.append(f'<div class="signature-stamp">: {sig_text}</div>')
+            html_parts.append(f'<div class="signature-time">: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>')
+
+    elif jenis == "praktisi":
+        # Semua sheet
+        sheets_data = [
+            ("Init", df_init_clean),
+            ("Proses 1", df_p1_clean),
+            ("Proses 2", df_p2_clean),
+            ("Proses 3", df_p3_clean),
+            ("Final", df_final_clean),
+        ]
+
+        for sheet_name, df in sheets_data:
+            if df is not None and not df.empty:
+                html_parts.append(f"<h2>Sheet: {sheet_name} ({processor.metode_aktif})</h2>")
+                if sheet_name != "Final":
+                    html_parts.append(df.to_html(index=False, escape=False, classes='standard-table'))
+                else: # Untuk Final, gunakan struktur manual
+                    html_parts.append('<table class="final-table">')
+                    html_parts.append(f'<tr class="final-concept-row"><td colspan="10" class="final-concept">{df.iloc[0, 0]}</td></tr>')
+                    html_parts.append(f'<tr class="final-subtitle-row"><td></td><td colspan="8" class="final-subtitle">{df.iloc[1, 1]}</td><td></td></tr>')
+                    html_parts.append('<tr class="final-sub-header">')
+                    html_parts.append(f'<td colspan="3" class="final-sub-header">{df.iloc[2, 0]}</td>')
+                    html_parts.append(f'<td colspan="4" class="final-sub-header">{df.iloc[2, 3]}</td>')
+                    html_parts.append(f'<td colspan="3" class="final-sub-header">{df.iloc[2, 7]}</td>')
+                    html_parts.append('</tr>')
+                    html_parts.append('<tr class="final-main-header">')
+                    for header in df.columns:
+                        html_parts.append(f'<th class="final-main-header">{header}</th>')
+                    html_parts.append('</tr>')
+                    for index, row in df.iloc[3:].iterrows():
+                        html_parts.append('<tr>')
+                        for i, cell in enumerate(row):
+                            cell_class = ""
+                            if i == 0:
+                                cell_class = "final-label-col"
+                            elif i in [1, 3, 5, 7]:
+                                cell_class = "final-label-col"
+                            elif i == 9:
+                                cell_class = "final-arab-col"
+                            html_parts.append(f'<td class="{cell_class}">{cell}</td>')
+                        html_parts.append('</tr>')
+                    html_parts.append('</table>')
+
+                    sig_text = signature_text or processor.signature_text
+                    html_parts.append(f'<div class="signature-title">__</div>')
+                    html_parts.append(f'<div class="signature-stamp">: {sig_text}</div>')
+                    html_parts.append(f'<div class="signature-time">: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>')
+
+    else:
+        print(f"[WARNING] Jenis output '{jenis}' tidak dikenal untuk HTML. Gunakan 'pengguna' atau 'praktisi'.")
+        return # Batalkan ekspor jika jenis tidak valid
+
+    html_parts.append("</body></html>")
+    full_html = "".join(html_parts)
+
+    try:
+        with open(output_name, 'w', encoding='utf-8') as f:
+            f.write(full_html)
+        print(f"[SAVED] File HTML {processor.metode_aktif} disimpan sebagai: {output_name}")
+    except Exception as e:
+        print(f"[ERROR] Gagal menyimpan file HTML '{output_name}': {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# --- Modifikasi fungsi write_excel_output ---
+def write_excel_output(processor, output_name, jenis="pengguna"):
+    """Ekspor DataFrame hasil pemrosesan ke file Excel."""
+    with pd.ExcelWriter(output_name, engine="openpyxl") as writer:
+        if jenis == "praktisi":
+            if hasattr(processor, 'df_init') and processor.df_init is not None:
+                processor.df_init.to_excel(writer, sheet_name="Init", index=False)
+            if hasattr(processor, 'df_p1') and processor.df_p1 is not None:
+                processor.df_p1.to_excel(writer, sheet_name="Proses 1", index=False)
+            if hasattr(processor, 'df_p2') and processor.df_p2 is not None:
+                processor.df_p2.to_excel(writer, sheet_name="Proses 2", index=False)
+            if hasattr(processor, 'df_p3') and processor.df_p3 is not None:
+                processor.df_p3.to_excel(writer, sheet_name="Proses 3", index=False)
+            if hasattr(processor, 'df_final') and processor.df_final is not None:
+                processor.df_final.to_excel(writer, sheet_name="Final", index=False)
+        elif jenis == "pengguna":
+            if hasattr(processor, 'df_init') and processor.df_init is not None:
+                processor.df_init.to_excel(writer, sheet_name="Init", index=False)
+            if hasattr(processor, 'df_final') and processor.df_final is not None:
+                processor.df_final.to_excel(writer, sheet_name="Final", index=False)
+        else:
+            print(f"[WARNING] Jenis output '{jenis}' tidak dikenal, menggunakan default 'pengguna'.")
+            if hasattr(processor, 'df_init') and processor.df_init is not None:
+                processor.df_init.to_excel(writer, sheet_name="Init", index=False)
+            if hasattr(processor, 'df_final') and processor.df_final is not None:
+                processor.df_final.to_excel(writer, sheet_name="Final", index=False)
+    print(f"[SAVED] File Excel {processor.metode_aktif} disimpan sebagai: {output_name}")
+    return output_name
+
+# --- Modifikasi fungsi export_and_format_output ---
+def export_and_format_output(processor, output_name, jenis="pengguna", format="excel", sheet_name="Final", signature_text=None):
+    """Ekspor hasil pemrosesan lalu aplikasikan format Excel atau buat HTML."""
+    if format.lower() == "excel":
+        write_excel_output(processor, output_name, jenis=jenis)
+        formatter = FormatterTabelFinal(output_name, sheet_name=sheet_name, signature_text=signature_text or processor.signature_text)
+        formatter.apply_formatting()
+    elif format.lower() == "html":
+        # Panggil fungsi HTML baru
+        export_and_format_html(processor, output_name, jenis=jenis, signature_text=signature_text or processor.signature_text)
+        # Note: HTML tidak menerapkan formatting Excel
+    else:
+        print(f"[ERROR] Format '{format}' tidak didukung. Gunakan 'excel' atau 'html'.")
+        return
+    return output_name
+
+# --- Kelas FormatterTabelFinal tetap sama (untuk Excel) ---
+class FormatterTabelFinal:
+    def __init__(self, file_path, sheet_name="Final", signature_text="Ainurrahman Cluster MDC"):
+        self.file_path = file_path
+        self.sheet_name = sheet_name
+        self.signature_text = signature_text
+
+    def _get_target_sheets(self, wb):
+        all_possible_sheets = ["Init", "Proses 1", "Proses 2", "Proses 3", "Final"]
+        if self.sheet_name == "Final":
+            return [name for name in all_possible_sheets if name in wb.sheetnames]
+        elif self.sheet_name == "All":
+             return [name for name in wb.sheetnames if name in all_possible_sheets]
+        else:
+             if self.sheet_name in wb.sheetnames:
+                 return [self.sheet_name]
+             else:
+                 print(f"[WARNING] Sheet '{self.sheet_name}' tidak ditemukan di workbook.")
+                 return []
+
+    def _apply_standard_style(self, ws):
+        font_header = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+        font_body = Font(name="Arial", size=10)
+        font_label = Font(name="Arial", size=10, bold=True)
+        font_title = Font(name="Arial", size=12, bold=True)
+        align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+        fill_alt = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+        thin_border = Border(
+            left=Side(style="thin"), right=Side(style="thin"),
+            top=Side(style="thin"), bottom=Side(style="thin")
+        )
+
+        if ws.max_row > 0:
+            for row in range(1, ws.max_row + 1):
+                for col in range(1, ws.max_column + 1):
+                    cell = ws.cell(row=row, column=col)
+                    cell.border = thin_border
+                    cell.alignment = align_center
+                    if row == 1:
+                        cell.font = font_header
+                        cell.fill = fill_header
+                    else:
+                        cell.font = font_body
+                        if col == 1:
+                            cell.font = font_label
+                        if row % 2 == 0:
+                            cell.fill = fill_alt
+        ws.freeze_panes = "A2"
+        for col in range(1, ws.max_column + 1):
+            column_letter = get_column_letter(col)
+            max_length = 0
+            for row in range(1, ws.max_row + 1):
+                cell_value = ws.cell(row=row, column=col).value
+                if cell_value is None:
+                    continue
+                if isinstance(cell_value, (int, float)):
+                    cell_length = len(str(cell_value)) + 2
+                else:
+                    cell_length = len(str(cell_value)) + 2
+                max_length = max(max_length, cell_length)
+            ws.column_dimensions[column_letter].width = min(max_length + 2, 40)
+
+    def _apply_final_style(self, ws):
+        font_title = Font(name="Arial", size=14, bold=True, color="000000")
+        font_subtitle = Font(name="Arial", size=11, bold=True, italic=True)
+        font_header = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+        font_body_regular = Font(name="Arial", size=10)
+        font_arab = Font(name="Arial", size=12, bold=True)
+        font_label = Font(name="Arial", size=10, bold=True, color="000000")
+        font_label_italic = Font(name="Arial", size=10, bold=True, italic=True)
+        font_label_bold = Font(name="Arial", size=10, bold=True)
+        align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        align_center_top = Alignment(horizontal="center", vertical="top", wrap_text=True)
+        fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+        fill_alt_row = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+        thin_border = Border(
+            left=Side(style="thin"), right=Side(style="thin"),
+            top=Side(style="thin"), bottom=Side(style="thin")
+        )
+        thick_border = Border(
+            left=Side(style="thick"), right=Side(style="thick"),
+            top=Side(style="thick"), bottom=Side(style="thick")
+        )
+
+        ws.merge_cells("A1:J1")
+        ws["A1"].font = font_title
+        ws["A1"].alignment = align_center
+        ws.merge_cells("A2:J2")
+        ws["A2"].font = font_subtitle
+        ws["A2"].alignment = align_center
+        ws.merge_cells("A4:C4")
+        ws["A4"].alignment = align_center
+        ws["A4"].border = thick_border
+        ws["A4"].font = font_label
+        ws.merge_cells("D4:G4")
+        ws["D4"].alignment = align_center
+        ws["D4"].border = thick_border
+        ws["D4"].font = font_label
+        ws.merge_cells("H4:J4")
+        ws["H4"].alignment = align_center
+        ws["H4"].border = thick_border
+        ws["H4"].font = font_label
+        ws["B3"].font = font_label_italic
+        ws["I3"].font = font_subtitle
+
+        for col in range(1, 11):
+            cell = ws.cell(row=5, column=col)
+            cell.font = font_header
+            cell.fill = fill_header
+            cell.alignment = align_center
+            cell.border = thin_border
+
+        max_r = ws.max_row
+        max_c = min(10, ws.max_column)
+        for row in range(6, max_r + 1):
+            for col in range(1, max_c + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.alignment = align_center_top
+                cell.border = thin_border
+                if col == 10:
+                    cell.font = font_arab
+                elif col == 1:
+                    cell.font = font_label_italic
+                elif col in {2, 4, 6, 8}:
+                    cell.font = font_label_bold
+                else:
+                    cell.font = font_body_regular
+                if row % 2 == 0:
+                    cell.fill = fill_alt_row
+
+        column_widths = {"A": 5, "B": 7, "C": 10, "D": 4, "E": 10, "F": 4, "G": 10, "H": 7, "I": 15, "J": 5}
+        for col_letter, width in column_widths.items():
+            if col_letter in ws.column_dimensions:
+                ws.column_dimensions[col_letter].width = width
+
+        signature_row = ws.max_row + 2
+        signature_title = "__"
+        signature_stamp = f": {self.signature_text}"
+        signature_time = f": {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+        ws.merge_cells(start_row=signature_row, start_column=1, end_row=signature_row, end_column=10)
+        ws.cell(signature_row, 1, value=signature_title)
+        ws.cell(signature_row, 1).font = Font(name="Arial", size=12, bold=True, color="1F497D")
+        ws.cell(signature_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+        ws.cell(signature_row, 1).fill = PatternFill(start_color="E9F2FF", end_color="E9F2FF", fill_type="solid")
+        # ws.cell(signature_row, 1).border = thin_border
+
+        ws.merge_cells(start_row=signature_row + 1, start_column=1, end_row=signature_row + 1, end_column=10)
+        ws.cell(signature_row + 1, 1, value=signature_stamp)
+        ws.cell(signature_row + 1, 1).font = font_label_bold
+        ws.cell(signature_row + 1, 1).alignment = Alignment(horizontal="center", vertical="center")
+        # ws.cell(signature_row + 1, 1).border = thin_border
+
+        ws.merge_cells(start_row=signature_row + 2, start_column=1, end_row=signature_row + 2, end_column=10)
+        ws.cell(signature_row + 2, 1, value=signature_time)
+        ws.cell(signature_row + 2, 1).font = Font(name="Arial", size=9, italic=True)
+        ws.cell(signature_row + 2, 1).alignment = Alignment(horizontal="center", vertical="center")
+        # ws.cell(signature_row + 2, 1).border = thin_border
+
+    def apply_formatting(self):
+        try:
+            wb = openpyxl.load_workbook(self.file_path)
+            target_sheets = self._get_target_sheets(wb)
+
+            if not target_sheets:
+                print(f"[WARNING] Tidak ada sheet target yang ditemukan untuk formatting: {self.sheet_name}")
+                return
+
+            for sheet_name in target_sheets:
+                ws = wb[sheet_name]
+                if sheet_name == "Final":
+                    self._apply_final_style(ws)
+                else:
+                    self._apply_standard_style(ws)
+
+            wb.save(self.file_path)
+            print(f"[OK] Format dan Style berhasil diaplikasikan pada sheet(s): {', '.join(target_sheets)}")
+        except Exception as e:
+            print(f"[ERROR] Gagal melakukan styling: {e}")
+
+
+========================================
+NAMA FILE: pdfmaker.py
+========================================
+
+import os
+import sys
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from datetime import datetime
+
+# =========================================================
+# KONFIGURASI - SESUAIKAN DENGAN KOMPUTER ANDA
+# =========================================================
+
+# Folder berisi file Excel/Calc
+INPUT_FOLDER = Path(r"D:\ExcelFiles")
+
+# Folder tujuan PDF
+OUTPUT_FOLDER = Path(r"D:\PDFFiles")
+
+# Folder profile sementara LibreOffice
+# Berguna agar proses batch tidak bentrok dengan LibreOffice manual
+PROFILE_FOLDER = Path(r"D:\LOProfile")
+
+# Jika kosong, script akan mencari LibreOffice otomatis.
+# Jika LibreOffice tidak terdeteksi, isi path lengkap soffice/libreoffice.
+#
+# Contoh Windows:
+# LIBREOFFICE_PATH = r"C:\Program Files\LibreOffice\program\soffice.exe"
+#
+# Contoh Linux:
+# LIBREOFFICE_PATH = "/usr/bin/soffice"
+#
+# Contoh macOS:
+# LIBREOFFICE_PATH = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+LIBREOFFICE_PATH = ""
+
+# Jika True, proses juga masuk ke subfolder
+RECURSIVE = False
+
+# Jika True, PDF lama akan ditimpa
+# Jika False, PDF yang sudah ada akan dilewati
+OVERWRITE_EXISTING_PDF = False
+
+# Batas waktu konversi per file, dalam detik
+TIMEOUT_SECONDS = 300
+
+# Jumlah percobaan ulang jika gagal
+MAX_RETRY = 2
+
+# Ekstensi file yang akan diproses
+EXTENSIONS = {".xlsx", ".xls", ".xlsm", ".ods"}
+
+# =========================================================
+
+
+def find_libreoffice():
+    """
+    Cari executable LibreOffice.
+    """
+    if LIBREOFFICE_PATH:
+        p = Path(LIBREOFFICE_PATH).expanduser().resolve()
+        if p.exists():
+            return p
+        raise FileNotFoundError(
+            f"LIBREOFFICE_PATH tidak ditemukan: {p}"
+        )
+
+    # Coba cari dari PATH
+    for name in ("soffice", "libreoffice"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+
+    candidates = []
+
+    if os.name == "nt":
+        program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+        program_files_x86 = os.environ.get(
+            "PROGRAMFILES(X86)", r"C:\Program Files (x86)"
+        )
+
+        candidates.extend([
+            Path(program_files) / "LibreOffice" / "program" / "soffice.exe",
+            Path(program_files_x86) / "LibreOffice" / "program" / "soffice.exe",
+        ])
+
+    elif sys.platform == "darwin":
+        candidates.append(
+            Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+        )
+
+    else:
+        candidates.extend([
+            Path("/usr/bin/soffice"),
+            Path("/usr/bin/libreoffice"),
+            Path("/usr/local/bin/soffice"),
+            Path("/usr/local/bin/libreoffice"),
+            Path("/snap/bin/libreoffice"),
+        ])
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(
+        "LibreOffice tidak ditemukan. "
+        "Silakan isi LIBREOFFICE_PATH di script dengan path lengkap soffice/libreoffice."
+    )
+
+
+def collect_files(input_folder: Path):
+    """
+    Kumpulkan file Excel/Calc.
+    """
+    files = []
+
+    patterns = ["*.xlsx", "*.xls", "*.xlsm", "*.ods"]
+
+    for pattern in patterns:
+        if RECURSIVE:
+            files.extend(input_folder.rglob(pattern))
+        else:
+            files.extend(input_folder.glob(pattern))
+
+    # Abaikan file temporary Excel
+    files = [
+        f for f in files
+        if f.is_file() and not f.name.startswith("~$")
+    ]
+
+    return sorted(files, key=lambda x: str(x).lower())
+
+
+def get_pdf_path(input_folder: Path, output_folder: Path, excel_file: Path):
+    """
+    Tentukan path PDF tujuan.
+    """
+    if RECURSIVE:
+        rel = excel_file.relative_to(input_folder)
+        pdf_path = output_folder / rel.with_suffix(".pdf")
+    else:
+        pdf_path = output_folder / (excel_file.stem + ".pdf")
+
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    return pdf_path
+
+
+def run_libreoffice(
+    soffice: Path,
+    excel_file: Path,
+    outdir: Path,
+    profile_folder: Path
+):
+    """
+    Jalankan LibreOffice headless untuk convert satu file ke PDF.
+    """
+    cmd = [
+        str(soffice),
+        f"-env:UserInstallation={profile_folder.as_uri()}",
+        "--headless",
+        "--norestore",
+        "--nolockcheck",
+        "--nologo",
+        "--invisible",
+        "--convert-to", "pdf",
+        "--outdir", str(outdir),
+        str(excel_file),
+    ]
+
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": TIMEOUT_SECONDS,
+    }
+
+    # Agar tidak muncul jendela console tambahan di Windows
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    return subprocess.run(cmd, **kwargs)
+
+
+def convert_with_retry(
+    soffice: Path,
+    excel_file: Path,
+    pdf_path: Path,
+    profile_folder: Path
+):
+    """
+    Convert file dengan retry jika gagal.
+    """
+    last_error = ""
+
+    for attempt in range(1, MAX_RETRY + 1):
+        try:
+            result = run_libreoffice(
+                soffice=soffice,
+                excel_file=excel_file,
+                outdir=pdf_path.parent,
+                profile_folder=profile_folder
+            )
+
+            if result.returncode == 0 and pdf_path.exists():
+                return True, ""
+
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+
+            last_error = (
+                f"returncode={result.returncode}; "
+                f"stderr={stderr[:500]}; "
+                f"stdout={stdout[:200]}"
+            )
+
+        except subprocess.TimeoutExpired:
+            last_error = f"timeout setelah {TIMEOUT_SECONDS} detik"
+
+        except Exception as e:
+            last_error = str(e)
+
+        if attempt < MAX_RETRY:
+            time.sleep(2)
+
+    return False, last_error
+
+
+def main():
+    input_folder = INPUT_FOLDER.expanduser().resolve()
+    output_folder = OUTPUT_FOLDER.expanduser().resolve()
+    profile_folder = PROFILE_FOLDER.expanduser().resolve()
+
+    if not input_folder.exists():
+        print(f"Folder input tidak ditemukan: {input_folder}")
+        return
+
+    output_folder.mkdir(parents=True, exist_ok=True)
+    profile_folder.mkdir(parents=True, exist_ok=True)
+
+    try:
+        soffice = find_libreoffice()
+    except Exception as e:
+        print(e)
+        return
+
+    files = collect_files(input_folder)
+    total = len(files)
+
+    if total == 0:
+        print("Tidak ada file Excel/Calc yang ditemukan.")
+        return
+
+    log_file = output_folder / f"export_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    def log(msg):
+        print(msg)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+
+    log("======================================================")
+    log("BATCH EXPORT EXCEL/CALC TO PDF - PYTHON + LIBREOFFICE")
+    log("======================================================")
+    log(f"LibreOffice : {soffice}")
+    log(f"Input       : {input_folder}")
+    log(f"Output      : {output_folder}")
+    log(f"Profile     : {profile_folder}")
+    log(f"Total file  : {total}")
+    log(f"Recursive   : {RECURSIVE}")
+    log(f"Overwrite   : {OVERWRITE_EXISTING_PDF}")
+    log("======================================================")
+
+    success = []
+    skipped = []
+    failed = []
+
+    try:
+        for index, excel_file in enumerate(files, start=1):
+            pdf_path = get_pdf_path(
+                input_folder=input_folder,
+                output_folder=output_folder,
+                excel_file=excel_file
+            )
+
+            try:
+                display_name = excel_file.relative_to(input_folder)
+            except ValueError:
+                display_name = excel_file.name
+
+            # Jika PDF sudah ada dan overwrite dimatikan, lewati
+            if pdf_path.exists() and not OVERWRITE_EXISTING_PDF:
+                skipped.append(excel_file)
+                log(f"[{index}/{total}] SKIP  : {display_name} -> PDF sudah ada")
+                continue
+
+            # Jika overwrite dinyalakan, hapus PDF lama agar tidak salah deteksi
+            if pdf_path.exists() and OVERWRITE_EXISTING_PDF:
+                try:
+                    pdf_path.unlink()
+                except Exception as e:
+                    failed.append((excel_file, f"gagal hapus PDF lama: {e}"))
+                    log(f"[{index}/{total}] ERROR : {display_name} -> gagal hapus PDF lama")
+                    continue
+
+            ok, error = convert_with_retry(
+                soffice=soffice,
+                excel_file=excel_file,
+                pdf_path=pdf_path,
+                profile_folder=profile_folder
+            )
+
+            if ok:
+                success.append(excel_file)
+                log(f"[{index}/{total}] OK    : {display_name} -> {pdf_path.name}")
+            else:
+                failed.append((excel_file, error))
+                log(f"[{index}/{total}] GAGAL : {display_name} -> {error}")
+
+    except KeyboardInterrupt:
+        log("\nProses dihentikan manual oleh user.")
+
+    finally:
+        log("\n======================================================")
+        log("RINGKASAN")
+        log("======================================================")
+        log(f"Total   : {total}")
+        log(f"OK      : {len(success)}")
+        log(f"Skip    : {len(skipped)}")
+        log(f"Gagal   : {len(failed)}")
+        log(f"Log     : {log_file}")
+
+        if failed:
+            log("\nDetail file gagal:")
+            for file_path, error in failed:
+                log(f"{file_path} | {error}")
+
+
+if __name__ == "__main__":
+    main()
+
+========================================
+NAMA FILE: pdf_export.py
+========================================
+
+# pdf_export.py
+# Kode ekspor PDF yang sepenuhnya bergantung pada reportlab
+# Harus diimpor hanya jika reportlab tersedia
+
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, PageBreak, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.lib.units import inch # Import inch secara eksplisit
+import pandas as pd # Import pandas untuk pd.isna
+import io
+import os
+
+# --- Canvas kustom untuk penomoran halaman (versi sederhana dan aman) ---
+class NumberedCanvas(canvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        canvas.Canvas.__init__(self, *args, **kwargs)
+        # Tidak perlu inisialisasi variabel khusus untuk penomoran
+
+    def onFirstPage(self, canvas, doc):
+        # Fungsi ini dipanggil sekali saat halaman pertama dibuat
+        # Biasanya digunakan untuk header halaman pertama
+        # Kita abaikan untuk penomoran halaman biasa
+        pass
+
+    def onLaterPages(self, canvas, doc):
+        # Fungsi ini dipanggil untuk setiap halaman setelah halaman pertama
+        # Kita bisa menempatkan nomor halaman di sini jika ingin berbeda untuk hal. 1 dan seterusnya
+        # Tapi untuk penomoran standar, kita gunakan showPage
+        pass
+
+    def showPage(self):
+        # Fungsi ini dipanggil setiap kali halaman selesai dirender
+        # Tempat yang ideal untuk menambahkan nomor halaman
+        # reportlab secara otomatis menambahkan 1 ke _pageNumber setiap kali showPage dipanggil
+        self.draw_page_number()
+        canvas.Canvas.showPage(self) # Wajib: panggil fungsi asli showPage
+
+    def draw_page_number(self):
+        # Fungsi untuk menggambar nomor halaman
+        # Gunakan self._pageNumber yang disediakan oleh reportlab
+        # Lokasi nomor halaman
+        x_position = 7.5 * inch
+        y_position = 0.5 * inch
+        # Format nomor halaman (misalnya "Page X of Y")
+        # Catatan: self._currentPages disediakan oleh doc, bukan canvas
+        # Untuk mendapatkan total halaman, kita perlu trik lain atau menetapkan nilainya nanti
+        # Untuk sementara, kita gunakan nomor halaman saat ini saja
+        # Kita bisa menetapkan total halaman di canvas saat save
+        page_num_text = f"Page {self.getPageNumber()}" # getPageNumber() adalah metode resmi reportlab
+        self.setFont("Helvetica", 10)
+        self.drawRightString(x_position, y_position, page_num_text)
+
+    def save(self):
+        # Fungsi ini dipanggil saat dokumen selesai dibuat
+        # Biasanya digunakan untuk membersihkan atau menyimpan state akhir
+        # Kita cukup panggil fungsi asli
+        canvas.Canvas.save(self)
+
+def clean_for_reportlab(value):
+    """Fungsi untuk membersihkan nilai sebelum dimasukkan ke reportlab."""
+    if pd.isna(value) or value is None:
+        return "" # Ganti NaN atau None dengan string kosong
+    # Coba encode/decode untuk memastikan string bisa ditulis ke PDF
+    try:
+        s_val = str(value)
+        cleaned_bytes = s_val.encode('utf-8', errors='replace')
+        return cleaned_bytes.decode('utf-8', errors='replace')
+    except UnicodeDecodeError:
+        print(f"[DEBUG] Karakter aneh terdeteksi: {value}, diganti dengan ''")
+        return ""
+
+def df_to_reportlab_table_final(df, processor): # Tambahkan processor sebagai argumen untuk akses metode dan sign
+    """Konversi DataFrame Final ke objek Table reportlab dengan styling Final."""
+    # Data asli dari df_final
+    df_values = df.values.tolist()
+
+    # --- Bangun struktur tabel untuk reportlab ---
+    # Header Row (kolom 1-10)
+    # Kita gunakan header dari kolom DataFrame, tetapi struktur Final spesifik
+    # Kolom 1: Konsep Dasar (span 10 cols)
+    # Kolom 2: Metode dan Juz (span 10 cols)
+    # Kolom 3: Header sub judul (span 3, 4, 3 cols)
+    # Kolom 4: Header kolom utama (10 kolom)
+    # Kolom 5 dst: Data (10 kolom)
+    # Baris 1: Konsep Dasar
+    row_1 = [df.columns[0]] + [""] * 9 # Span ke 10 kolom
+    # Baris 2: Metode dan Juz
+    row_2 = [processor.metode_aktif] + [""] * 6 + [f'Juz {processor.NILAI_FILTER}'] + [""] * 2 # Sesuaikan span
+    # Baris 3: Sub Judul Header
+    row_3 = ["Latin & Hari"] + [""] * 2 + ["Ayat Khusus & Titik Kesadaran"] + [""] * 2 + ["Arab & Dasar"] + [""] * 2
+    # Baris 4: Header Kolom Utama
+    row_4 = df.iloc[0].tolist() # Ambil header dari baris pertama data asli
+
+    # Data Rows
+    data_rows = df.iloc[1:].values.tolist() # Ambil baris data mulai dari indeks 1
+
+    # Gabungkan semua baris
+    table_data = [row_1, row_2, row_3, row_4] + data_rows
+
+    # Buat objek Table
+    t = Table(table_data, colWidths=[5*mm, 7*mm, 10*mm, 4*mm, 10*mm, 4*mm, 10*mm, 7*mm, 15*mm, 5*mm]) # Gunakan mm untuk presisi lebih tinggi
+
+    # --- Definisikan Style ---
+    # Warna Header
+    header_bg_color = colors.HexColor('#1F497D')
+    alt_row_color = colors.lightgrey
+
+    # Style Umum
+    common_style = [
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'), # Gunakan TOP untuk seluruh isi
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    ]
+
+    # Style Header Spesifik (Baris 0-4)
+    header_style = [
+        ('FONTNAME', (0, 0), (-1, 3), 'Helvetica-Bold'), # Bold untuk header
+        ('FONTSIZE', (0, 0), (-1, 0), 14), # Ukuran lebih besar untuk konsep
+        ('FONTSIZE', (0, 1), (-1, 1), 11), # Ukuran subtitle
+        ('TEXTCOLOR', (0, 0), (-1, 3), colors.whitesmoke), # Warna teks header
+        ('BACKGROUND', (0, 0), (-1, 3), header_bg_color), # Warna background header
+        # Merge Cells Header
+        ('SPAN', (0, 0), (-1, 0)), # Konsep Dasar
+        ('SPAN', (1, 1), (-1, 1)), # Metode & Juz - Kolom 2 sd akhir
+        ('SPAN', (0, 2), (2, 2)), # Latin & Hari
+        ('SPAN', (3, 2), (6, 2)), # Ayat Khusus
+        ('SPAN', (7, 2), (-1, 2)), # Arab & Dasar
+        # Align teks spesifik header
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'), # Center konsep
+        ('ALIGN', (1, 1), (-1, 1), 'CENTER'), # Center metode & juz
+        ('ALIGN', (0, 2), (2, 2), 'CENTER'), # Center Latin
+        ('ALIGN', (3, 2), (6, 2), 'CENTER'), # Center Ayat Khusus
+        ('ALIGN', (7, 2), (-1, 2), 'CENTER'), # Center Arab
+    ]
+
+    # Style Baris Data
+    data_style = []
+    for i in range(4, len(table_data)): # Mulai dari baris data (indeks 4)
+        bg_color = alt_row_color if (i - 4) % 2 == 0 else colors.white # Warna selang-seling
+        data_style.append(('BACKGROUND', (0, i), (-1, i), bg_color))
+        # Style khusus kolom Arab (kolom terakhir, indeks 9)
+        data_style.append(('FONTNAME', (9, i), (9, i), 'Helvetica-Bold')) # Bold Arab
+        # Style khusus kolom Label (kolom pertama, indeks 0)
+        data_style.append(('FONTNAME', (0, i), (0, i), 'Helvetica-Bold')) # Bold Label
+        data_style.append(('FONTNAME', (1, i), (8, i), 'Helvetica')) # Regular body
+        # Align teks spesifik kolom
+        data_style.append(('ALIGN', (0, i), (0, i), 'CENTER')) # Center Label
+        data_style.append(('ALIGN', (1, i), (8, i), 'CENTER')) # Center Body
+        data_style.append(('ALIGN', (9, i), (9, i), 'CENTER')) # Center Arab
+
+    # Style Footer (Signature)
+    # Kita perlu menambahkan baris footer ke table_data dan menambahkan style merge
+    # Baris footer akan ditambahkan di akhir fungsi ini
+    signature_row_data = ["__", f": {processor.signature_text}", f": {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
+    # Tambahkan 7 kolom kosong di awal untuk align dengan tabel
+    signature_row_full = [""] * 7 + signature_row_data
+    table_data.append(signature_row_full)
+    footer_style = [
+        ('SPAN', (0, -1), (-1, -1)), # Merge seluruh baris signature
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#E9F2FF")), # Warna background signature
+        ('GRID', (0, -1), (-1, -1), 1, colors.black), # Border signature
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'), # Bold title
+        ('FONTSIZE', (0, -1), (-1, -1), 12), # Ukuran title
+        ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#1F497D')), # Warna title
+        ('ALIGN', (0, -1), (-1, -1), 'CENTER'), # Center title
+        ('SPAN', (1, -2), (-1, -2)), # Merge stamp row
+        ('FONTNAME', (1, -2), (-1, -2), 'Helvetica'), # Regular stamp
+        ('FONTSIZE', (1, -2), (-1, -2), 10), # Size stamp
+        ('ALIGN', (1, -2), (-1, -2), 'CENTER'), # Center stamp
+        ('SPAN', (1, -3), (-1, -3)), # Merge time row
+        ('FONTNAME', (1, -3), (-1, -3), 'Helvetica'), # Regular time
+        ('FONTSIZE', (1, -3), (-1, -3), 9), # Size time
+        ('ITALIC', (1, -3), (-1, -3)), # Italic time
+        ('ALIGN', (1, -3), (-1, -3), 'CENTER'), # Center time
+    ]
+
+    # Gabungkan semua style
+    t.setStyle(TableStyle(common_style + header_style + data_style + footer_style))
+
+    return t
+
+def export_and_format_pdf(processor, output_name, jenis="pengguna", signature_text=None):
+    """Ekspor hasil ke PDF dengan styling dan page number."""
+    print(f"[INFO] Mengekspor ke PDF: {output_name} (jenis: {jenis})")
+
+    # --- Inisialisasi dokumen di buffer ---
+    buffer = io.BytesIO()
+    try:
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+    except Exception as e:
+        print(f"[ERROR] Gagal membuat SimpleDocTemplate: {e}")
+        return
+
+    elements = []
+
+    # --- Ekspor sheet berdasarkan jenis ---
+    try:
+        if jenis == "pengguna":
+            # Hanya Init dan Final
+            # --- Sheet Init ---
+            if hasattr(processor, 'df_init') and processor.df_init is not None and not processor.df_init.empty:
+                elements.append(Paragraph(f"Sheet: Init ({processor.metode_aktif})", getSampleStyleSheet()['Heading1']))
+                # Bersihkan data df_init sebelum membuat list
+                df_init_clean = processor.df_init.fillna("")
+                df_init_clean = df_init_clean.apply(lambda col: col.map(clean_for_reportlab, na_action='ignore'))
+                df_init_list = [df_init_clean.columns.tolist()] + df_init_clean.values.tolist()
+                t_init = Table(df_init_list)
+                # Gunakan style umum untuk Init
+                table_header_style = [
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 10),
+                    ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F497D')),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                ]
+                table_body_style = [
+                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                    ('FONTSIZE', (0, 1), (-1, -1), 10),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                ]
+                # Warna Selang-seling Baris
+                for i in range(1, len(df_init_list)):
+                    bg_color = colors.lightgrey if i % 2 == 0 else colors.white
+                    table_body_style.append(('BACKGROUND', (0, i), (-1, i), bg_color))
+                t_init.setStyle(TableStyle(table_header_style + table_body_style))
+                elements.append(t_init)
+                elements.append(PageBreak())
+
+            # --- Sheet Final ---
+            if hasattr(processor, 'df_final') and processor.df_final is not None and not processor.df_final.empty:
+                elements.append(Paragraph(f"Sheet: Final ({processor.metode_aktif})", getSampleStyleSheet()['Heading1']))
+                # Gunakan fungsi khusus untuk membuat tabel Final dengan styling
+                t_final = df_to_reportlab_table_final(processor.df_final, processor) # Kirim processor untuk akses sign
+                elements.append(t_final)
+                # elements.append(PageBreak()) # Hilangkan PageBreak jika tidak ingin dipisah
+
+        elif jenis == "praktisi":
+            sheets_data = [
+                ("Init", getattr(processor, 'df_init', None)),
+                ("Proses 1", getattr(processor, 'df_p1', None)),
+                ("Proses 2", getattr(processor, 'df_p2', None)),
+                ("Proses 3", getattr(processor, 'df_p3', None)),
+                ("Final", getattr(processor, 'df_final', None)),
+            ]
+
+            for sheet_name, df in sheets_data:
+                if df is not None and not df.empty:
+                    elements.append(Paragraph(f"Sheet: {sheet_name} ({processor.metode_aktif})", getSampleStyleSheet()['Heading1']))
+                    if sheet_name == "Final":
+                         t = df_to_reportlab_table_final(df, processor)
+                         elements.append(t)
+                    else: # Untuk sheet lain, gunakan pendekatan umum
+                        # Bersihkan data sebelum membuat list
+                        df_clean = df.fillna("")
+                        df_clean = df_clean.apply(lambda col: col.map(clean_for_reportlab, na_action='ignore'))
+                        df_list = [df_clean.columns.tolist()] + df_clean.values.tolist()
+                        t = Table(df_list)
+                        # Gunakan style umum
+                        table_header_style = [
+                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                            ('FONTSIZE', (0, 0), (-1, 0), 10),
+                            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                            ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F497D')),
+                            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                        ]
+                        table_body_style = [
+                            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                            ('FONTSIZE', (0, 1), (-1, -1), 10),
+                            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                        ]
+                        # Warna Selang-seling Baris
+                        for i in range(1, len(df_list)):
+                            bg_color = colors.lightgrey if i % 2 == 0 else colors.white
+                            table_body_style.append(('BACKGROUND', (0, i), (-1, i), bg_color))
+                        t.setStyle(TableStyle(table_header_style + table_body_style))
+                        elements.append(t)
+                    if sheet_name != "Final":
+                        elements.append(PageBreak())
+        else:
+            print(f"[WARNING] Jenis output '{jenis}' tidak dikenal untuk PDF. Gunakan 'pengguna' atau 'praktisi'.")
+            return # Batalkan ekspor jika jenis tidak valid
+    except Exception as e:
+        print(f"[ERROR] Gagal membangun elemen-elemen PDF: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+
+    # --- Build dokumen ke buffer ---
+    try:
+        doc.build(elements, canvasmaker=NumberedCanvas)
+        print(f"[INFO] Build PDF ke buffer selesai.")
+    except Exception as e:
+        print(f"[ERROR] Gagal membuat PDF di buffer '{output_name}': {e}")
+        import traceback
+        traceback.print_exc()
+        return # Batalkan jika build gagal
+
+    # --- Salin buffer ke file ---
+    try:
+        buffer.seek(0) # Pastikan posisi awal buffer
+        with open(output_name, 'wb') as f:
+            f.write(buffer.getvalue())
+        print(f"[SAVED] File PDF {processor.metode_aktif} disimpan sebagai: {output_name}")
+    except Exception as e:
+        print(f"[ERROR] Gagal menulis buffer ke file '{output_name}': {e}")
+        import traceback
+        traceback.print_exc()
+        # Hapus file jika terjadi error saat menulis
+        try:
+            if os.path.exists(output_name):
+                os.remove(output_name)
+                print(f"[INFO] File corrupt '{output_name}' telah dihapus.")
+        except OSError as oe:
+            print(f"[ERROR] Gagal menghapus file corrupt '{output_name}': {oe}")
+
+    finally:
+        buffer.close() # Tutup buffer setelah selesai
+
+# Import datetime untuk waktu signature di footer tabel final
+from datetime import datetime
+# Import mm untuk ukuran kolom
+from reportlab.lib.units import mm
+
+
+========================================
+NAMA FILE: penggabung_file_py.py
+========================================
+
+import glob
+
+with open("gabungan_kode.txt", "w", encoding="utf-8") as file_keluar:
+    # Membaca semua file dengan ekstensi .py
+    for nama_file in glob.glob("*.py"):
+        file_keluar.write(f"\n\n{'='*40}\n")
+        file_keluar.write(f"NAMA FILE: {nama_file}\n")
+        file_keluar.write(f"{'='*40}\n\n")
+        
+        try:
+            with open(nama_file, "r", encoding="utf-8") as file_masuk:
+                file_keluar.write(file_masuk.read())
+        except Exception as e:
+            file_keluar.write(f"Gagal membaca file: {e}\n")
+
+print("Selesai! Buka file gabungan_kode.txt")
+
+========================================
+NAMA FILE: rawdata_ah_alljuz.py
+========================================
+
+import os
+import pandas as pd
+from backend1 import PengolahDataJBAH
+
+def generate_raw_data_all_juz():
+    """
+    This script processes data for all 30 Juz using the JBAH method,
+    extracts the flattened data from 'proses_3' for each Juz,
+    and compiles it into a single Excel file.
+    """
+    print("--- MEMULAI GENERASI RAW DATA TABEL AH (ALL JUZ) ---")
+
+    # --- Konfigurasi Awal ---
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    FILE_MENTAH = os.path.join(script_dir, "datasource", "Struktur Quran18.xlsx")
+    KOLOM_FILTER = "aq_juz_id"
+    METODE_UTAMA = "T111"  # Menggunakan T111 sebagai metode standar
+    NAMA_FILE_OUTPUT = os.path.join(script_dir, "rawdatatabel_ah_alljuz.xlsx")
+
+    # --- Inisialisasi Pengolah Data ---
+    app = PengolahDataJBAH(FILE_MENTAH)
+    if app.raw_data is None:
+        print("[FATAL] Gagal memuat data mentah. Proses dihentikan.")
+        return
+
+    # --- Proses Iterasi per Juz ---
+    list_df_p3_all_juz = []
+    for juz_number in range(1, 31):
+        print(f"\n[INFO] Memproses Juz {juz_number}...")
+
+        # 1. Filter data untuk Juz saat ini
+        if app.filter_data(KOLOM_FILTER, juz_number) is None:
+            print(f"[WARN] Tidak ada data untuk Juz {juz_number} atau terjadi error. Melanjutkan ke Juz berikutnya.")
+            continue
+
+        # 2. Jalankan pipeline pemrosesan
+        app.set_metode(METODE_UTAMA)
+        app.proses_1_dan_2()
+        app.proses_3()
+
+        # 3. Ambil hasil dari df_p3 dan tambahkan kolom ah_juz_id
+        df_p3_current = app.df_p3.copy()
+        df_p3_current['ah_juz_id'] = juz_number
+        list_df_p3_all_juz.append(df_p3_current)
+        print(f"[OK] Juz {juz_number} berhasil diproses.")
+
+    # --- Kompilasi dan Ekspor Hasil ---
+    if not list_df_p3_all_juz:
+        print("\n[END] Tidak ada data yang berhasil diproses. File Excel tidak dibuat.")
+        return
+
+    print("\n[INFO] Menggabungkan hasil dari semua Juz...")
+    final_df = pd.concat(list_df_p3_all_juz, ignore_index=True)
+
+    # Reorder kolom agar 'ah_juz_id' di depan
+    final_df = final_df[['ah_juz_id', 'p3_id', 'Label', 'Ayat']]
+
+    print(f"[INFO] Menyimpan hasil ke file Excel: {NAMA_FILE_OUTPUT}")
+    try:
+        with pd.ExcelWriter(NAMA_FILE_OUTPUT, engine='openpyxl') as writer:
+            final_df.to_excel(writer, sheet_name='Raw_Data_Proses_3_All_Juz', index=False)
+        print(f"\n[SUCCESS] File '{NAMA_FILE_OUTPUT}' berhasil dibuat.")
+    except Exception as e:
+        print(f"\n[ERROR] Gagal menyimpan file Excel: {e}")
+
+if __name__ == "__main__":
+    generate_raw_data_all_juz()
+
+========================================
+NAMA FILE: rawdata_ah_hrfain_alljuz.py
+========================================
+
+import os
+import pandas as pd
+from backend2 import PengolahDataJBAH
+
+def generate_raw_data_all_juz():
+    """
+    This script processes data for all 30 Juz using the JBAH method,
+    extracts the flattened data from 'proses_3' for each Juz,
+    and compiles it into a single Excel file.
+    """
+    print("--- MEMULAI GENERASI RAW DATA TABEL AH (ALL JUZ) ---")
+
+    # --- Konfigurasi Awal ---
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    FILE_MENTAH = os.path.join(script_dir, "datasource", "rawahaq_expanded.xlsx")
+    KOLOM_FILTER = "aq_juz_id"
+    METODE_UTAMA = "T111"  # Menggunakan T111 sebagai metode standar
+    NAMA_FILE_OUTPUT = os.path.join(script_dir, "rawdatatabel_ah_hrfain_alljuz.xlsx")
+
+    # --- Inisialisasi Pengolah Data ---
+    app = PengolahDataJBAH(FILE_MENTAH)
+    if app.raw_data is None:
+        print("[FATAL] Gagal memuat data mentah. Proses dihentikan.")
+        return
+
+    # --- Proses Iterasi per Juz ---
+    list_df_p3_all_juz = []
+    for juz_number in range(1, 31):
+        print(f"\n[INFO] Memproses Juz {juz_number}...")
+
+        # 1. Filter data untuk Juz saat ini
+        if app.filter_data(KOLOM_FILTER, juz_number) is None:
+            print(f"[WARN] Tidak ada data untuk Juz {juz_number} atau terjadi error. Melanjutkan ke Juz berikutnya.")
+            continue
+
+        # 2. Jalankan pipeline pemrosesan
+        app.set_metode(METODE_UTAMA)
+        app.proses_1_dan_2()
+        app.proses_3()
+
+        # 3. Ambil hasil dari df_p3 dan tambahkan kolom ah_juz_id
+        df_p3_current = app.df_p3.copy()
+        df_p3_current['ah_juz_id'] = juz_number
+        list_df_p3_all_juz.append(df_p3_current)
+        print(f"[OK] Juz {juz_number} berhasil diproses.")
+
+    # --- Kompilasi dan Ekspor Hasil ---
+    if not list_df_p3_all_juz:
+        print("\n[END] Tidak ada data yang berhasil diproses. File Excel tidak dibuat.")
+        return
+
+    print("\n[INFO] Menggabungkan hasil dari semua Juz...")
+    final_df = pd.concat(list_df_p3_all_juz, ignore_index=True)
+
+    # Reorder kolom agar 'ah_juz_id' di depan
+    final_df = final_df[['ah_juz_id', 'p3_id', 'Label', 'Ayat']]
+
+    print(f"[INFO] Menyimpan hasil ke file Excel: {NAMA_FILE_OUTPUT}")
+    try:
+        with pd.ExcelWriter(NAMA_FILE_OUTPUT, engine='openpyxl') as writer:
+            final_df.to_excel(writer, sheet_name='Raw_Data_Proses_3_All_Juz', index=False)
+        print(f"\n[SUCCESS] File '{NAMA_FILE_OUTPUT}' berhasil dibuat.")
+    except Exception as e:
+        print(f"\n[ERROR] Gagal menyimpan file Excel: {e}")
+
+if __name__ == "__main__":
+    generate_raw_data_all_juz()
+
+========================================
+NAMA FILE: rekon_excel.py
+========================================
+
+import pandas as pd
+import os
+
+def expand_data(input_filename='rawahaq.xlsx', output_filename='rawahaq_expanded.xlsx'):
+    """
+    Membaca file Excel, memperluas baris berdasarkan kolom 'Bobot',
+    dan menyimpan hasilnya ke file Excel baru dengan kolom ID tambahan.
+
+    Args:
+        input_filename (str): Nama file Excel input.
+        output_filename (str): Nama file Excel output.
+    """
+    # Dapatkan direktori di mana script ini berada
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Gabungkan dengan nama file untuk mendapatkan path lengkap
+    input_path = os.path.join(script_dir, input_filename)
+    output_path = os.path.join(script_dir, output_filename)
+    
+    # Membaca data dari file Excel (header ada pada baris ke-2 / index 1)
+    df = pd.read_excel(input_path, header=0)
+
+    # Inisialisasi list untuk menyimpan baris-baris hasil ekspansi
+    expanded_rows = []
+    ay_huruf_ain_id_counter = 1 # Mulai ID dari 1
+
+    # Iterasi melalui setiap baris di DataFrame asli
+    for index, row in df.iterrows():
+        # Dapatkan nilai bobot
+        weight = int(row['Bobot']) # Pastikan bobot adalah integer
+
+        # Ulangi sebanyak nilai bobot
+        for _ in range(weight):
+            # Salin baris saat ini
+            new_row = row.copy()
+            # Tambahkan ID unik ke salinan baris
+            new_row['ay_huruf_wau_id'] = ay_huruf_ain_id_counter
+            # Tambahkan salinan baris ke list hasil
+            expanded_rows.append(new_row)
+            # Naikkan counter ID
+            ay_huruf_ain_id_counter += 1
+
+    # Buat DataFrame baru dari list hasil
+    expanded_df = pd.DataFrame(expanded_rows)
+
+    # Urutkan berdasarkan ID (opsional, tapi biasanya diharapkan)
+    expanded_df.sort_values(by='ay_huruf_wau_id', inplace=True, ignore_index=True)
+
+    # Simpan DataFrame baru ke file Excel
+    expanded_df.to_excel(output_path, index=False)
+    print(f"Data berhasil diproses dan disimpan ke '{output_path}'")
+
+if __name__ == "__main__":
+    # Meminta nama file input dan output dari pengguna
+    nama_file_sumber = input("Masukkan nama file sumber (dengan ekstensi .xlsx): [default: rawahaq.xlsx] ") or 'rawahaq.xlsx'
+    nama_file_output = input("Masukkan nama file output (dengan ekstensi .xlsx): [default: rawahaq_expanded.xlsx] ") or 'rawahaq_expanded.xlsx'
+
+    try:
+        # Panggil fungsi untuk memproses data
+        expand_data(nama_file_sumber, nama_file_output)
+    except FileNotFoundError:
+        print(f"Error: File '{nama_file_sumber}' tidak ditemukan.")
+    except Exception as e:
+        print(f"Terjadi kesalahan saat memproses file: {e}")
+
+
+========================================
+NAMA FILE: test_simple_pdf.py
+========================================
+
+# test_simple_pdf.py
+# Script untuk menguji apakah reportlab dapat membuat PDF sederhana tanpa corrupt
+
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import inch
+    import io
+    import os
+    print("[INFO] Berhasil mengimpor reportlab.")
+except ImportError as e:
+    print(f"[ERROR] Gagal mengimpor reportlab: {e}")
+    exit(1)
+
+# --- Canvas kustom untuk penomoran halaman ---
+class NumberedCanvas(canvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        canvas.Canvas.__init__(self, *args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage() # type: ignore # Pylance: _startPage adalah metode resmi canvas.Canvas
+
+    def save(self):
+        """add page info to each page (page x of y)"""
+        num_pages = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.draw_page_number(num_pages)
+        canvas.Canvas.save(self)
+
+    def draw_page_number(self, page_count):
+        self.setFont("Helvetica", 10)
+        # Gunakan inch yang telah diimpor
+        self.drawRightString(7.5*inch, 0.5*inch, f"Page {self._pageNumber} of {page_count}") # type: ignore # Pylance: _pageNumber adalah atribut resmi canvas.Canvas
+
+def create_simple_pdf(output_name):
+    """Buat PDF sederhana hanya dengan teks dan penomoran halaman."""
+    print(f"[INFO] Mencoba membuat PDF sederhana: {output_name}")
+
+    # --- Gunakan buffer ---
+    buffer = io.BytesIO()
+    try:
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+    except Exception as e:
+        print(f"[ERROR] Gagal membuat SimpleDocTemplate di test: {e}")
+        return False
+
+    styles = getSampleStyleSheet()
+    elements = []
+
+    # Tambahkan beberapa elemen sederhana
+    elements.append(Paragraph("Hello World dari Test PDF!", styles['Title']))
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph("Ini adalah file PDF sederhana untuk menguji reportlab.", styles['Normal']))
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph("Jika Anda membaca ini, reportlab berfungsi.", styles['Normal']))
+
+    try:
+        doc.build(elements, canvasmaker=NumberedCanvas)
+        print(f"[INFO] Build PDF sederhana ke buffer selesai.")
+    except Exception as e:
+        print(f"[ERROR] Gagal membuat PDF sederhana di buffer: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    # --- Salin buffer ke file ---
+    try:
+        buffer.seek(0) # Pastikan posisi awal buffer
+        with open(output_name, 'wb') as f:
+            f.write(buffer.getvalue())
+        print(f"[SAVED] File PDF sederhana disimpan sebagai: {output_name}")
+        buffer.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Gagal menulis buffer ke file '{output_name}': {e}")
+        import traceback
+        traceback.print_exc()
+        buffer.close()
+        # Hapus file jika terjadi error saat menulis
+        try:
+            if os.path.exists(output_name):
+                os.remove(output_name)
+                print(f"[INFO] File corrupt '{output_name}' telah dihapus.")
+        except OSError as oe:
+            print(f"[ERROR] Gagal menghapus file corrupt '{output_name}': {oe}")
+        return False
+
+if __name__ == "__main__":
+    success = create_simple_pdf("test_simple_reportlab.pdf")
+    if success:
+        print("\n[SUCCESS] File 'test_simple_reportlab.pdf' berhasil dibuat. Silakan coba buka.")
+        print("Jika file ini bisa dibuka, maka masalahnya terletak pada data yang diberikan ke reportlab di pdf_export.py.")
+    else:
+        print("\n[FAILURE] File 'test_simple_reportlab.pdf' gagal dibuat atau korup.")
+        print("Ini berarti ada masalah mendasar dengan reportlab atau cara kita menggunakannya.")
+
+========================================
+NAMA FILE: test_simple_pdf_direct.py
+========================================
+
+# test_simple_pdf_direct.py
+# Script untuk menguji apakah reportlab dapat membuat PDF sederhana TANPA buffer IO dan TANPA canvas kustom
+
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    # from reportlab.pdfgen import canvas # Jangan impor canvas dulu
+    # from reportlab.lib.units import inch # Jangan impor inch dulu
+    # import io # Jangan gunakan io.BytesIO
+    print("[INFO] Berhasil mengimpor reportlab (kecuali canvas).")
+except ImportError as e:
+    print(f"[ERROR] Gagal mengimpor reportlab: {e}")
+    exit(1)
+
+def create_simple_pdf_direct(output_name):
+    """Buat PDF sederhana hanya dengan teks, TANPA penomoran halaman kustom."""
+    print(f"[INFO] Mencoba membuat PDF sederhana (direct write, no custom canvas): {output_name}")
+
+    # --- Tulis LANGSUNG ke file ---
+    try:
+        doc = SimpleDocTemplate(output_name, pagesize=letter)
+    except Exception as e:
+        print(f"[ERROR] Gagal membuat SimpleDocTemplate di test direct: {e}")
+        return False
+
+    styles = getSampleStyleSheet()
+    elements = []
+
+    # Tambahkan beberapa elemen sederhana
+    elements.append(Paragraph("Hello World dari Test PDF Direct!", styles['Title']))
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph("Ini adalah file PDF sederhana untuk menguji reportlab TANPA buffer dan canvas kustom.", styles['Normal']))
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph("Jika Anda membaca ini, reportlab bisa menulis ke file secara langsung.", styles['Normal']))
+
+    try:
+        doc.build(elements) # <-- JANGAN gunakan canvasmaker
+        print(f"[SAVED] File PDF sederhana (direct) disimpan sebagai: {output_name}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Gagal membuat atau menulis PDF direct '{output_name}': {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+if __name__ == "__main__":
+    success = create_simple_pdf_direct("test_simple_reportlab_direct.pdf")
+    if success:
+        print("\n[SUCCESS] File 'test_simple_reportlab_direct.pdf' berhasil dibuat. Silakan coba buka.")
+        print("Jika file ini bisa dibuka, maka masalahnya MUNGKIN besar terkait dengan canvas kustom NumberedCanvas.")
+    else:
+        print("\n[FAILURE] File 'test_simple_reportlab_direct.pdf' gagal dibuat atau korup.")
+        print("Ini berarti ada masalah mendasar yang lebih luas dengan reportlab dan lingkungan Anda.")
+
+========================================
+NAMA FILE: userinput.py
+========================================
+
+# userinput.py
+
+import os
+import re
+import sys
+from backend1 import PengolahDataJBAH
+from dataextraction import save_filtered_data_to_excel
+import pandas as pd
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
+def sanitize_filename(name):
+    """Hapus karakter ilegal pada nama file/folder Windows dan bersihkan tanda kutip."""
+    # Hapus tanda kutip tunggal/ganda yang mungkin membungkus input
+    name = name.strip().strip('"').strip("' ")
+    # Daftar karakter ilegal di Windows: \ / : * ? " < > |
+    name = re.sub(r'[\/:*?"<>|]', '_', name)
+    return name.strip()
+
+def parse_juz_input(input_str):
+    """Parse user input for single Juz, range (e.g., "1" or "1-5"), or comma-separated list (e.g., "1,3,5")."""
+    input_str = input_str.strip()
+    # Coba parsing sebagai daftar yang dipisahkan koma terlebih dahulu
+    if "," in input_str:
+        try:
+            # Split by comma, strip whitespace, convert to int
+            juz_numbers = [int(x.strip()) for x in input_str.split(",")]
+            # Validasi: pastikan semua angka > 0 dan unik (opsional)
+            if any(juz < 1 for juz in juz_numbers):
+                 raise ValueError("Nomor Juz harus lebih besar dari 0.")
+            # Opsional: hapus duplikat dan urutkan
+            # juz_numbers = sorted(set(juz_numbers))
+            return juz_numbers
+        except ValueError as ve:
+            # Jika gagal parsing sebagai koma, coba sebagai range
+            if "invalid literal for int()" in str(ve):
+                raise ValueError(f"Format daftar Juz tidak valid: {input_str}. Gunakan angka, koma, dan/atau tanda hubung. Contoh: 1,3,5 atau 1-5 atau 7")
+            else:
+                raise ve # Re-raise jika error lain (misalnya, angka < 1)
+
+    # Jika tidak ada koma, gunakan logika asli untuk single atau range
+    if "-" in input_str:
+        # Range input
+        try:
+            start, end = map(int, input_str.split("-"))
+            if start > end:
+                raise ValueError("Start must be <= end")
+            return list(range(start, end + 1))
+        except ValueError:
+            raise ValueError("Invalid range format. Use e.g., 1-5")
+    else:
+        # Single Juz
+        try:
+            return [int(input_str)]
+        except ValueError:
+            raise ValueError("Invalid number. Use e.g., 1")
+
+def list_available_datasource(script_dir):
+    """List file Excel yang tersedia di folder datasource."""
+    datasource_dir = os.path.join(script_dir, "datasource")
+    available = []
+    if os.path.isdir(datasource_dir):
+        for f in os.listdir(datasource_dir):
+            if f.lower().endswith(('.xlsx', '.xls')):
+                name_without_ext = os.path.splitext(f)[0]
+                available.append((name_without_ext, f))
+    return available
+
+def main():
+    print("--- MEMULAI PENGOLAH DATA JBAH (USER INPUT) ---")
+    # Get script directory to handle paths correctly
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    datasource_dir = os.path.join(script_dir, "datasource")
+
+    ## Default settings
+    DEFAULT_SOURCE_NAME = "rawahaq"
+    KOLOM_FILTER = "aq_juz_id"
+    JENIS_OUTPUT_DEFAULT = "pengguna"  # Ganti default
+    FORMAT_OUTPUT_DEFAULT = "excel"    # Default format
+
+    # User input for data source file (pilih nomor)
+    print("\n--- PILIH FILE SUMBER DATA ---")
+    available_files = list_available_datasource(script_dir)
+    if not available_files:
+        print(f"[ERROR] Tidak ada file Excel (.xlsx/.xls) di folder: {datasource_dir}")
+        print(f"        Silakan letakkan file data sumber Anda di folder tersebut terlebih dahulu.")
+        sys.exit(1)
+
+    # Cari index default (DEFAULT_SOURCE_NAME)
+    default_idx = None
+    for idx, (name_no_ext, full_name) in enumerate(available_files):
+        if name_no_ext.lower() == DEFAULT_SOURCE_NAME.lower():
+            default_idx = idx + 1  # 1-based
+            break
+    if default_idx is None:
+        default_idx = 1  # fallback ke file pertama jika default tidak ada
+
+    print(f"File Excel yang tersedia di folder 'datasource':")
+    for idx, (name_no_ext, full_name) in enumerate(available_files, 1):
+        marker = " [default]" if idx == default_idx else ""
+        print(f"  {idx}. {full_name}{marker}")
+
+    while True:
+        choice = input(f"Masukkan nomor pilihan Anda (default: {default_idx}): ").strip()
+        if not choice:
+            choice = str(default_idx)
+        # Cek apakah input adalah nomor
+        try:
+            choice_num = int(choice)
+            if 1 <= choice_num <= len(available_files):
+                name_no_ext, full_name = available_files[choice_num - 1]
+                FILE_MENTAH = os.path.join(datasource_dir, full_name)
+                print(f"[INFO] Pilihan #{choice_num}: {full_name}")
+                print(f"[INFO] Menggunakan file sumber: {FILE_MENTAH}")
+                break
+            else:
+                print(f"[ERROR] Nomor tidak valid. Masukkan angka antara 1 sampai {len(available_files)}.")
+        except ValueError:
+            print(f"[ERROR] Masukkan hanya ANGKA (1-{len(available_files)}). Nama file manual tidak didukung.")
+
+    # User input for Juz number(s) - PINDAH DEFINISI KE SINI AGAR BISA DI-ACCESS SECARA GLOBAL
+    juz_list = None
+    while True:
+        try:
+            user_input = input("Masukkan nomor Juz (contoh: 1 atau 1-5 atau 1,3,5): ")
+            juz_list = parse_juz_input(user_input)
+            break
+        except ValueError as e:
+            print(f"[ERROR] {e}. Mohon coba lagi!")
+
+    # User input for output directory
+    user_output_dir = sanitize_filename(input("Masukkan nama folder output (default: dataoutput): ").strip() or "dataoutput")
+
+    # User input for output filename template
+    default_template = "Output_JBAH_Juz{juz}_{metode}.xlsx"
+    print(f"\nFormat penamaan file (placeholder: {{juz}} = nomor juz, {{metode}} = T111/T222/T333)")
+    print(f"  * Tips: Anda bisa memasukkan nama file tanpa placeholder, nanti akan ditambahkan otomatis.")
+    file_template_raw = input(f"Masukkan template nama file (default: {default_template}): ").strip() or default_template
+
+    # Sanitize template (tapi placeholder {juz} dan {metode} harus tetap dipertahankan)
+    # Normalisasi placeholder secara case-insensitive, mis. {Juz} -> {juz},
+    # dan pertahankan spec format jika ada (mis. {Juz:02d} -> {juz:02d}).
+    file_template_raw = re.sub(r'\{\s*(?i:juz)\s*([^}]*)\}', lambda m: '{juz' + m.group(1) + '}', file_template_raw)
+    file_template_raw = re.sub(r'\{\s*(?i:metode)\s*([^}]*)\}', lambda m: '{metode' + m.group(1) + '}', file_template_raw)
+
+    placeholder_juz = "__JUZ_PLACEHOLDER__"
+    placeholder_metode = "__METODE_PLACEHOLDER__"
+    temp_template = file_template_raw.replace("{juz}", placeholder_juz).replace("{metode}", placeholder_metode)
+    temp_template = sanitize_filename(temp_template)
+    file_template = temp_template.replace(placeholder_juz, "{juz}").replace(placeholder_metode, "{metode}")
+
+    # Logika fleksibel: pastikan template punya placeholder agar file tidak saling menimpa
+    has_juz = "{juz}" in file_template
+    has_metode = "{metode}" in file_template
+
+    # Pisahkan nama file dan extension
+    base_name, ext = os.path.splitext(file_template)
+    if not ext:
+        ext = ".xlsx"
+
+    if not has_juz and not has_metode:
+        # User tidak masukkan placeholder sama sekali → auto-tambah keduanya
+        file_template = f"{base_name}_Juz{{juz}}_{{metode}}{ext}"
+        print(f"[INFO] Template disesuaikan (auto-tambah placeholder): {file_template}")
+    elif has_juz and not has_metode:
+        # Hanya ada {juz}, tambahkan {metode} agar 3 metode tidak saling timpa
+        file_template = f"{base_name}_{{metode}}{ext}"
+        print(f"[INFO] Template disesuaikan (auto-tambah {{metode}}): {file_template}")
+    elif not has_juz and has_metode:
+        # Hanya ada {metode}, tambahkan {juz} agar multi juz tidak saling timpa
+        file_template = f"{base_name}_Juz{{juz}}{ext}"
+        print(f"[INFO] Template disesuaikan (auto-tambah {{juz}}): {file_template}")
+    # else: keduanya ada, biarkan seperti input user
+
+    # --- Tambahkan bagian ini ---
+    while True:
+        jenis_pengguna_input = input("\nPilih jenis output - a. Pengguna (Init & Final saja)   b. Praktisi (Semua Tab)\nMasukkan pilihan (a/b) (default: a): ").strip().lower()
+        if jenis_pengguna_input == '' or jenis_pengguna_input == 'a':
+            JENIS_OUTPUT_FINAL = "pengguna"
+            break
+        elif jenis_pengguna_input == 'b':
+            JENIS_OUTPUT_FINAL = "praktisi"
+            break
+        else:
+            print("[ERROR] Pilihan tidak valid. Harap masukkan 'a' atau 'b'.")
+
+    while True:
+        format_output_input = input("\nPilih format output - a. Excel   b. HTML\nMasukkan pilihan (a/b) (default: a): ").strip().lower()
+        if format_output_input == '' or format_output_input == 'a':
+            FORMAT_OUTPUT_FINAL = "excel"
+            ext_default = ".xlsx"
+            break
+        elif format_output_input == 'b':
+            FORMAT_OUTPUT_FINAL = "html"
+            ext_default = ".html"
+            break
+        else:
+            print("[ERROR] Pilihan tidak valid. Harap masukkan 'a' atau 'b'.")
+
+    # --- Tambahkan bagian ini untuk pilihan output Excel ---
+    if FORMAT_OUTPUT_FINAL == "excel":
+        while True:
+            excel_output_choice = input("\nPilih mode output Excel:\n  a. Satu file besar untuk semua Juz & Metode (dengan formatting otomatis per sheet)\n  b. Satu file per Juz (semua metode dalam satu file)\nMasukkan pilihan (a/b) (default: a): ").strip().lower()
+            if excel_output_choice == '' or excel_output_choice == 'a':
+                EXCEL_OUTPUT_MODE = "single_file"
+                break
+            elif excel_output_choice == 'b':
+                EXCEL_OUTPUT_MODE = "per_juz"
+                break
+            else:
+                print("[ERROR] Pilihan tidak valid. Harap masukkan 'a' atau 'b'.")
+    else:
+        # Jika bukan Excel, set mode ke None atau nilai default
+        EXCEL_OUTPUT_MODE = None # atau "single_file" jika HTML selalu single file
+
+    # ----------------------------
+
+    default_concept_label = "Konsep Dasar (metode jumlah ayat dalam juz)"
+    concept_label = input(f"Masukkan label konsep dasar (default: {default_concept_label}): ").strip() or default_concept_label
+
+    default_signature = "Ainurrahman Cluster MDC"
+    signature_text = input(f"Masukkan tanda tangan / penandatangan (default: {default_signature}): ").strip() or default_signature
+
+    # Initialize and process
+    app = PengolahDataJBAH(FILE_MENTAH, concept_label=concept_label, signature_text=signature_text)
+    if app.raw_data is not None:
+        # Process all methods for each Juz
+        daftar_metode = ["T111", "T222", "T333"]
+        # Create output directory if it doesn't exist
+        output_dir = os.path.join(script_dir, user_output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"[INFO] Folder output: {output_dir}")
+        print(f"[INFO] Template file: {file_template}")
+
+        # --- Logika Output Excel ---
+        if FORMAT_OUTPUT_FINAL == "excel" and EXCEL_OUTPUT_MODE == "single_file":
+            print("\n[INFO] Mode: Excel - Satu file besar. Mengumpulkan data...")
+            # Buat nama file untuk output single file
+            single_file_name = sanitize_filename(file_template.format(juz="ALL", metode="ALL")) # Ganti placeholder dengan ALL
+            if not single_file_name.lower().endswith(ext_default):
+                single_file_name += ext_default
+            NAMA_FILE_OUTPUT_SINGLE = os.path.join(output_dir, single_file_name)
+
+            # Inisialisasi writer untuk file besar
+            # KUMPULKAN DATA TERLEBIH DAHULU UNTUK MENGECEK APAKAH ADA YANG DIPROSES
+            data_to_write = [] # List tuple: (sheet_name, df_to_write)
+            for NILAI_FILTER in juz_list: # Gunakan juz_list yang didefinisikan di atas
+                print(f"\n=== Memproses Juz {NILAI_FILTER} ===")
+                # Filter data
+                staging_data = app.filter_data(KOLOM_FILTER, NILAI_FILTER)
+                if staging_data is None:
+                    print(f"[WARNING] Melewatkan Juz {NILAI_FILTER} karena tidak ada data.")
+                    continue
+
+                # Simpan data yang sudah difilter ke folder rawprocess
+                save_filtered_data_to_excel(staging_data, NILAI_FILTER)
+
+                for metode in daftar_metode:
+                    # Apply method and process
+                    app.set_metode(metode)
+                    app.proses_1_dan_2()
+                    app.proses_3()
+                    app.generate_tabel_jb_init()
+                    app.generate_tabel_ah_final()
+
+                    # --- Simpan ke list sementara ---
+                    sheet_prefix = f"Juz{NILAI_FILTER}_{metode}_"
+                    if JENIS_OUTPUT_FINAL == "praktisi":
+                        data_to_write.append((sheet_prefix + "Init", app.df_init))
+                        data_to_write.append((sheet_prefix + "Proses_1", app.df_p1))
+                        data_to_write.append((sheet_prefix + "Proses_2", app.df_p2))
+                        data_to_write.append((sheet_prefix + "Proses_3", app.df_p3))
+                        data_to_write.append((sheet_prefix + "Final", app.df_final))
+                    elif JENIS_OUTPUT_FINAL == "pengguna":
+                        data_to_write.append((sheet_prefix + "Init", app.df_init))
+                        data_to_write.append((sheet_prefix + "Final", app.df_final))
+
+            # PERIKSA APAKAH ADA DATA YANG DIPROSES
+            if not data_to_write:
+                 print(f"[WARNING] Tidak ada data yang berhasil diproses dari Juz {juz_list}. File Excel besar tidak akan dibuat.")
+            else:
+                 print(f"[INFO] Menemukan {len(data_to_write)} sheet untuk ditulis ke file gabungan.")
+                 with pd.ExcelWriter(NAMA_FILE_OUTPUT_SINGLE, engine='openpyxl') as writer:
+                     for sheet_name, df in data_to_write:
+                         df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+                 print(f"[SAVED] File Excel gabungan disimpan sebagai: {NAMA_FILE_OUTPUT_SINGLE}")
+                 print("[INFO] File gabungan dibuat. Sekarang menerapkan formatting otomatis ke setiap sheet...")
+
+                 # --- Apply formatting ke setiap sheet dalam file besar ---
+                 try:
+                     wb = openpyxl.load_workbook(NAMA_FILE_OUTPUT_SINGLE)
+                     sheet_names = wb.sheetnames
+
+                     for sheet_name in sheet_names:
+                         ws = wb[sheet_name]
+                         # Cek apakah sheet_name adalah Final berdasarkan nama (mengandung "_Final")
+                         if sheet_name.endswith("_Final"):
+                             # Terapkan styling Final
+                             apply_final_style(ws, signature_text)
+                         else:
+                             # Terapkan styling standar
+                             apply_standard_style(ws)
+
+                     wb.save(NAMA_FILE_OUTPUT_SINGLE)
+                     print(f"[OK] Formatting otomatis berhasil diterapkan ke file: {NAMA_FILE_OUTPUT_SINGLE}")
+                 except Exception as e:
+                     print(f"[ERROR] Gagal menerapkan formatting ke file gabungan: {e}")
+                     import traceback
+                     traceback.print_exc()
+
+        elif FORMAT_OUTPUT_FINAL == "excel" and EXCEL_OUTPUT_MODE == "per_juz":
+            print("\n[INFO] Mode: Excel - Satu file per Juz.")
+            for NILAI_FILTER in juz_list: # Gunakan juz_list yang didefinisikan di atas
+                print(f"\n=== Memproses Juz {NILAI_FILTER} ===")
+                # Filter data
+                staging_data = app.filter_data(KOLOM_FILTER, NILAI_FILTER)
+                if staging_data is None:
+                    print(f"[WARNING] Melewatkan Juz {NILAI_FILTER} karena tidak ada data.")
+                    continue
+
+                # Simpan data yang sudah difilter ke folder rawprocess
+                save_filtered_data_to_excel(staging_data, NILAI_FILTER)
+
+                # Buat nama file per Juz
+                juz_file_name = sanitize_filename(file_template.format(juz=NILAI_FILTER, metode="ALL")) # Gunakan ALL untuk metode
+                if not juz_file_name.lower().endswith(ext_default):
+                    juz_file_name += ext_default
+                NAMA_FILE_OUTPUT_PER_JUZ = os.path.join(output_dir, juz_file_name)
+
+                # Proses semua metode untuk Juz ini dan kumpulkan DataFrame
+                all_data_frames_per_juz = {}
+                for sheet_name in ["Init", "Proses 1", "Proses 2", "Proses 3", "Final"]:
+                    all_data_frames_per_juz[sheet_name] = []
+
+                for metode in daftar_metode:
+                    # Apply method and process
+                    app.set_metode(metode)
+                    app.proses_1_dan_2()
+                    app.proses_3()
+                    app.generate_tabel_jb_init()
+                    app.generate_tabel_ah_final()
+
+                    # Tambahkan hasil ke list sesuai sheet
+                    # Store tuples (df, metode) so we can reliably label rows later
+                    if JENIS_OUTPUT_FINAL == "praktisi":
+                        all_data_frames_per_juz["Init"].append((app.df_init, metode))
+                        all_data_frames_per_juz["Proses 1"].append((app.df_p1, metode))
+                        all_data_frames_per_juz["Proses 2"].append((app.df_p2, metode))
+                        all_data_frames_per_juz["Proses 3"].append((app.df_p3, metode))
+                        all_data_frames_per_juz["Final"].append((app.df_final, metode))
+                    elif JENIS_OUTPUT_FINAL == "pengguna":
+                        all_data_frames_per_juz["Init"].append((app.df_init, metode))
+                        all_data_frames_per_juz["Final"].append((app.df_final, metode))
+
+                # Gabungkan DataFrame per sheet untuk Juz ini
+                final_data_per_juz = {}
+                for sheet_name, df_list in all_data_frames_per_juz.items():
+                    if df_list:
+                        # df_list contains tuples (df, metode)
+                        dfs = [t[0] for t in df_list]
+                        combined_df = pd.concat(dfs, ignore_index=True)
+                        # Build metode labels from stored metode values rather than parsing cell text
+                        metode_labels = []
+                        for df_orig, met in df_list:
+                             metode_labels.extend([met] * len(df_orig))
+                        combined_df.insert(0, 'Metode', metode_labels)
+                        final_data_per_juz[sheet_name] = combined_df
+
+                # Ekspor ke file Excel per Juz
+                if final_data_per_juz:
+                     with pd.ExcelWriter(NAMA_FILE_OUTPUT_PER_JUZ, engine='openpyxl') as writer:
+                         for sheet_name, df in final_data_per_juz.items():
+                             df.to_excel(writer, sheet_name=sheet_name, index=False)
+                     print(f"[SAVED] File Excel untuk Juz {NILAI_FILTER} disimpan sebagai: {NAMA_FILE_OUTPUT_PER_JUZ}")
+                     # Kita tidak bisa langsung memformat file ini karena struktur datanya (banyak metode digabung) berbeda
+                     # dengan file single-metode/single-juz biasa.
+                     print("[INFO] File per Juz tidak diberi formatting otomatis karena struktur datanya berbeda.")
+                else:
+                    print(f"[WARNING] Tidak ada data untuk diekspor ke file Juz {NILAI_FILTER}.")
+
+        else: # --- Mode Output Lain (HTML atau Excel Single File Per Metode Lama) ---
+            # Mode lama: satu file per metode (seperti sebelum fitur tambahan)
+            # Kita bisa mempertahankan logika lama di sini jika format bukan excel atau mode bukan single_file/per_juz
+            # Tapi karena kita sudah menangani excel dengan mode tertentu di atas,
+            # bagian ini bisa diabaikan untuk excel, dan hanya berlaku untuk HTML.
+            if FORMAT_OUTPUT_FINAL == "html": # Pastikan hanya HTML yang masuk sini
+                 for NILAI_FILTER in juz_list: # Gunakan juz_list yang didefinisikan di atas
+                     print(f"\n=== Memproses Juz {NILAI_FILTER} ===")
+                     # Filter data
+                     staging_data = app.filter_data(KOLOM_FILTER, NILAI_FILTER)
+                     if staging_data is None:
+                         print(f"[WARNING] Melewatkan Juz {NILAI_FILTER} karena tidak ada data.")
+                         continue
+
+                     # Simpan data yang sudah difilter ke folder rawprocess
+                     save_filtered_data_to_excel(staging_data, NILAI_FILTER)
+
+                     for metode in daftar_metode:
+                         filename = file_template.format(juz=NILAI_FILTER, metode=metode)
+                         # Sanitize filename akhir (jika ada karakter ilegal dari juz/metode - tidak mungkin, tapi antisipasi)
+                         filename = sanitize_filename(filename)
+                         # Pastikan ekstensi sesuai dengan format output
+                         if not filename.lower().endswith(('.xlsx', '.html')):
+                             filename += ext_default
+                         elif (FORMAT_OUTPUT_FINAL == "excel" and not filename.lower().endswith('.xlsx')) or \
+                              (FORMAT_OUTPUT_FINAL == "html" and not filename.lower().endswith('.html')):
+                             # Ganti ekstensi jika tidak cocok dengan format yang dipilih
+                             name_root = os.path.splitext(filename)[0]
+                             filename = name_root + ext_default
+
+                         NAMA_FILE_OUTPUT = os.path.join(output_dir, filename)
+                         # Apply method and process
+                         app.set_metode(metode)
+                         app.proses_1_dan_2()
+                         app.proses_3()
+                         app.generate_tabel_jb_init()
+                         app.generate_tabel_ah_final()
+                         # Export file dan terapkan formatting melalui modul output terpisah
+                         # Gunakan JENIS_OUTPUT_FINAL dan FORMAT_OUTPUT_FINAL yang baru ditentukan
+                         app.export_excel(NAMA_FILE_OUTPUT, jenis=JENIS_OUTPUT_FINAL, format=FORMAT_OUTPUT_FINAL)
+            else:
+                 print(f"[ERROR] Mode output tidak dikenali untuk format {FORMAT_OUTPUT_FINAL}. Proses dibatalkan.")
+                 return # Batalkan jika mode tidak sesuai
+
+    print("\n[OK] SELURUH PROSES SELESAI")
+
+# --- Fungsi Styling untuk File Gabungan ---
+def apply_standard_style(ws):
+    """Apply basic Excel styling to a worksheet."""
+    font_header = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+    font_body = Font(name="Arial", size=10)
+    font_label = Font(name="Arial", size=10, bold=True)
+    font_title = Font(name="Arial", size=12, bold=True)
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    fill_alt = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin")
+    )
+
+    if ws.max_row > 0:
+        for row in range(1, ws.max_row + 1):
+            for col in range(1, ws.max_column + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.border = thin_border
+                cell.alignment = align_center
+                if row == 1:
+                    cell.font = font_header
+                    cell.fill = fill_header
+                else:
+                    cell.font = font_body
+                    if col == 1:
+                        cell.font = font_label
+                    if row % 2 == 0:
+                        cell.fill = fill_alt
+    ws.freeze_panes = "A2"
+    for col in range(1, ws.max_column + 1):
+        column_letter = get_column_letter(col)
+        max_length = 0
+        for row in range(1, ws.max_row + 1):
+            cell_value = ws.cell(row=row, column=col).value
+            if cell_value is None:
+                continue
+            if isinstance(cell_value, (int, float)):
+                cell_length = len(str(cell_value)) + 2
+            else:
+                cell_length = len(str(cell_value)) + 2
+            max_length = max(max_length, cell_length)
+        ws.column_dimensions[column_letter].width = min(max_length + 2, 40)
+
+def apply_final_style(ws, signature_text):
+    """Apply specific Excel styling for the 'Final' worksheet."""
+    font_title = Font(name="Arial", size=14, bold=True, color="000000")
+    font_subtitle = Font(name="Arial", size=11, bold=True, italic=True)
+    font_header = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    font_body_regular = Font(name="Arial", size=10)
+    font_arab = Font(name="Arial", size=12, bold=True)
+    font_label = Font(name="Arial", size=10, bold=True, color="000000")
+    font_label_italic = Font(name="Arial", size=10, bold=True, italic=True)
+    font_label_bold = Font(name="Arial", size=10, bold=True)
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    align_center_top = Alignment(horizontal="center", vertical="top", wrap_text=True)
+    fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    fill_alt_row = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin")
+    )
+    thick_border = Border(
+        left=Side(style="thick"), right=Side(style="thick"),
+        top=Side(style="thick"), bottom=Side(style="thick")
+    )
+
+    # Cek jumlah baris sebelum menggabungkan
+    max_r = ws.max_row
+    if max_r < 6:
+        print(f"[WARNING] Sheet '{ws.title}' tidak cukup baris untuk styling Final. Membatalkan styling.")
+        return
+
+    ws.merge_cells("A1:J1")
+    ws["A1"].font = font_title
+    ws["A1"].alignment = align_center
+    ws.merge_cells("A2:J2")
+    ws["A2"].font = font_subtitle
+    ws["A2"].alignment = align_center
+    ws.merge_cells("A4:C4")
+    ws["A4"].alignment = align_center
+    ws["A4"].border = thick_border
+    ws["A4"].font = font_label
+    ws.merge_cells("D4:G4")
+    ws["D4"].alignment = align_center
+    ws["D4"].border = thick_border
+    ws["D4"].font = font_label
+    ws.merge_cells("H4:J4")
+    ws["H4"].alignment = align_center
+    ws["H4"].border = thick_border
+    ws["H4"].font = font_label
+    ws["B3"].font = font_label_italic
+    ws["I3"].font = font_subtitle
+
+    for col in range(1, 11):
+        cell = ws.cell(row=5, column=col)
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.alignment = align_center
+        cell.border = thin_border
+
+    max_r = ws.max_row
+    max_c = min(10, ws.max_column)
+    for row in range(6, max_r + 1):
+        for col in range(1, max_c + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.alignment = align_center_top
+            cell.border = thin_border
+            if col == 10:
+                cell.font = font_arab
+            elif col == 1:
+                cell.font = font_label_italic
+            elif col in {2, 4, 6, 8}:
+                cell.font = font_label_bold
+            else:
+                cell.font = font_body_regular
+            if row % 2 == 0:
+                cell.fill = fill_alt_row
+
+    column_widths = {"A": 5, "B": 7, "C": 10, "D": 4, "E": 10, "F": 4, "G": 10, "H": 7, "I": 15, "J": 5}
+    for col_letter, width in column_widths.items():
+        if col_letter in ws.column_dimensions:
+            ws.column_dimensions[col_letter].width = width
+
+    signature_row = ws.max_row + 2
+    signature_title = "__"
+    signature_stamp = f": {signature_text}"
+    signature_time = f": {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+    ws.merge_cells(start_row=signature_row, start_column=1, end_row=signature_row, end_column=10)
+    ws.cell(signature_row, 1, value=signature_title)
+    ws.cell(signature_row, 1).font = Font(name="Arial", size=12, bold=True, color="1F497D")
+    ws.cell(signature_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(signature_row, 1).fill = PatternFill(start_color="E9F2FF", end_color="E9F2FF", fill_type="solid")
+    ws.cell(signature_row, 1).border = thin_border
+
+    ws.merge_cells(start_row=signature_row + 1, start_column=1, end_row=signature_row + 1, end_column=10)
+    ws.cell(signature_row + 1, 1, value=signature_stamp)
+    ws.cell(signature_row + 1, 1).font = font_label_bold
+    ws.cell(signature_row + 1, 1).alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(signature_row + 1, 1).border = thin_border
+
+    ws.merge_cells(start_row=signature_row + 2, start_column=1, end_row=signature_row + 2, end_column=10)
+    ws.cell(signature_row + 2, 1, value=signature_time)
+    ws.cell(signature_row + 2, 1).font = Font(name="Arial", size=9, italic=True)
+    ws.cell(signature_row + 2, 1).alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(signature_row + 2, 1).border = thin_border
+
+from datetime import datetime # Import datetime untuk signature di final style
+
+if __name__ == "__main__":
+    main()

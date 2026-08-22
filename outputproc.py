@@ -29,7 +29,7 @@ def export_and_format_html(processor, output_name, jenis="pengguna", signature_t
     html_parts.append("table { border-collapse: collapse; width: 100%; margin-bottom: 20px; table-layout: fixed; }") # table-layout: fixed; untuk lebar kolom konsisten
     html_parts.append("th, td { border: 1px solid black; padding: 8px; text-align: center; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }") # vertical-align: middle; untuk align vertikal
     html_parts.append("th { background-color: #1F497D; color: white; font-weight: bold; }")
-    html_parts.append("tr:nth-child(even) { background-color: #f2f2f2; }")
+    html_parts.append("tr:nth-child(even) { background-color: #D9D9D9; }")
     # Styling khusus untuk sheet Final (mengikuti struktur Final di Excel)
     # Header Konsep
     html_parts.append(".final-concept { font-size: 14pt; font-weight: bold; text-align: center; background-color: #E9F2FF; }")
@@ -221,7 +221,7 @@ def export_and_format_output(processor, output_name, jenis="pengguna", format="e
 
 # --- Kelas FormatterTabelFinal tetap sama (untuk Excel) ---
 class FormatterTabelFinal:
-    def __init__(self, file_path, sheet_name="Final", signature_text="Digital Signature"):
+    def __init__(self, file_path, sheet_name="Final", signature_text="Ainurrahman Cluster MDC"):
         self.file_path = file_path
         self.sheet_name = sheet_name
         self.signature_text = signature_text
@@ -240,13 +240,13 @@ class FormatterTabelFinal:
                  return []
 
     def _apply_standard_style(self, ws):
-        font_header = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+        font_header = Font(name="Arial", size=10, bold=True, color="000000")
         font_body = Font(name="Arial", size=10)
         font_label = Font(name="Arial", size=10, bold=True)
         font_title = Font(name="Arial", size=12, bold=True)
         align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
-        fill_alt = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        # fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+        fill_alt = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
         thin_border = Border(
             left=Side(style="thin"), right=Side(style="thin"),
             top=Side(style="thin"), bottom=Side(style="thin")
@@ -260,7 +260,7 @@ class FormatterTabelFinal:
                     cell.alignment = align_center
                     if row == 1:
                         cell.font = font_header
-                        cell.fill = fill_header
+                        # cell.fill = fill_header
                     else:
                         cell.font = font_body
                         if col == 1:
@@ -293,8 +293,8 @@ class FormatterTabelFinal:
         font_label_bold = Font(name="Arial", size=10, bold=True)
         align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
         align_center_top = Alignment(horizontal="center", vertical="top", wrap_text=True)
-        fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
-        fill_alt_row = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        # fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+        fill_alt_row = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
         thin_border = Border(
             left=Side(style="thin"), right=Side(style="thin"),
             top=Side(style="thin"), bottom=Side(style="thin")
@@ -328,7 +328,7 @@ class FormatterTabelFinal:
         for col in range(1, 11):
             cell = ws.cell(row=5, column=col)
             cell.font = font_header
-            cell.fill = fill_header
+            # cell.fill = fill_header
             cell.alignment = align_center
             cell.border = thin_border
 
@@ -365,19 +365,19 @@ class FormatterTabelFinal:
         ws.cell(signature_row, 1).font = Font(name="Arial", size=12, bold=True, color="1F497D")
         ws.cell(signature_row, 1).alignment = Alignment(horizontal="center", vertical="center")
         ws.cell(signature_row, 1).fill = PatternFill(start_color="E9F2FF", end_color="E9F2FF", fill_type="solid")
-        ws.cell(signature_row, 1).border = thin_border
+        # ws.cell(signature_row, 1).border = thin_border
 
         ws.merge_cells(start_row=signature_row + 1, start_column=1, end_row=signature_row + 1, end_column=10)
         ws.cell(signature_row + 1, 1, value=signature_stamp)
         ws.cell(signature_row + 1, 1).font = font_label_bold
         ws.cell(signature_row + 1, 1).alignment = Alignment(horizontal="center", vertical="center")
-        ws.cell(signature_row + 1, 1).border = thin_border
+        # ws.cell(signature_row + 1, 1).border = thin_border
 
         ws.merge_cells(start_row=signature_row + 2, start_column=1, end_row=signature_row + 2, end_column=10)
         ws.cell(signature_row + 2, 1, value=signature_time)
         ws.cell(signature_row + 2, 1).font = Font(name="Arial", size=9, italic=True)
         ws.cell(signature_row + 2, 1).alignment = Alignment(horizontal="center", vertical="center")
-        ws.cell(signature_row + 2, 1).border = thin_border
+        # ws.cell(signature_row + 2, 1).border = thin_border
 
     def apply_formatting(self):
         try:

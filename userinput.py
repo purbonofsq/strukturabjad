@@ -139,6 +139,11 @@ def main():
     file_template_raw = input(f"Masukkan template nama file (default: {default_template}): ").strip() or default_template
 
     # Sanitize template (tapi placeholder {juz} dan {metode} harus tetap dipertahankan)
+    # Normalisasi placeholder secara case-insensitive, mis. {Juz} -> {juz},
+    # dan pertahankan spec format jika ada (mis. {Juz:02d} -> {juz:02d}).
+    file_template_raw = re.sub(r'\{\s*(?i:juz)\s*([^}]*)\}', lambda m: '{juz' + m.group(1) + '}', file_template_raw)
+    file_template_raw = re.sub(r'\{\s*(?i:metode)\s*([^}]*)\}', lambda m: '{metode' + m.group(1) + '}', file_template_raw)
+
     placeholder_juz = "__JUZ_PLACEHOLDER__"
     placeholder_metode = "__METODE_PLACEHOLDER__"
     temp_template = file_template_raw.replace("{juz}", placeholder_juz).replace("{metode}", placeholder_metode)
@@ -214,7 +219,7 @@ def main():
     default_concept_label = "Konsep Dasar (metode jumlah ayat dalam juz)"
     concept_label = input(f"Masukkan label konsep dasar (default: {default_concept_label}): ").strip() or default_concept_label
 
-    default_signature = "Digital Signature"
+    default_signature = "Ainurrahman Cluster MDC"
     signature_text = input(f"Masukkan tanda tangan / penandatangan (default: {default_signature}): ").strip() or default_signature
 
     # Initialize and process
@@ -306,73 +311,88 @@ def main():
                      traceback.print_exc()
 
         elif FORMAT_OUTPUT_FINAL == "excel" and EXCEL_OUTPUT_MODE == "per_juz":
-            print("\n[INFO] Mode: Excel - Satu file per Juz.")
-            for NILAI_FILTER in juz_list: # Gunakan juz_list yang didefinisikan di atas
+        #    if EXCEL_OUTPUT_MODE == "per_juz":
+            for NILAI_FILTER in juz_list:
                 print(f"\n=== Memproses Juz {NILAI_FILTER} ===")
-                # Filter data
                 staging_data = app.filter_data(KOLOM_FILTER, NILAI_FILTER)
+
                 if staging_data is None:
-                    print(f"[WARNING] Melewatkan Juz {NILAI_FILTER} karena tidak ada data.")
+                    print(f"[WARNING] Tidak ditemukan data untuk Juz {NILAI_FILTER}. Lewati.")
                     continue
 
-                # Simpan data yang sudah difilter ke folder rawprocess
                 save_filtered_data_to_excel(staging_data, NILAI_FILTER)
 
-                # Buat nama file per Juz
-                juz_file_name = sanitize_filename(file_template.format(juz=NILAI_FILTER, metode="ALL")) # Gunakan ALL untuk metode
-                if not juz_file_name.lower().endswith(ext_default):
-                    juz_file_name += ext_default
-                NAMA_FILE_OUTPUT_PER_JUZ = os.path.join(output_dir, juz_file_name)
-
-                # Proses semua metode untuk Juz ini dan kumpulkan DataFrame
-                all_data_frames_per_juz = {}
-                for sheet_name in ["Init", "Proses 1", "Proses 2", "Proses 3", "Final"]:
-                    all_data_frames_per_juz[sheet_name] = []
+                # Kumpulkan DataFrame untuk Juz ini dengan nama sheet spesifik per metode
+                data_to_write_for_juz = []
 
                 for metode in daftar_metode:
-                    # Apply method and process
                     app.set_metode(metode)
                     app.proses_1_dan_2()
                     app.proses_3()
                     app.generate_tabel_jb_init()
                     app.generate_tabel_ah_final()
 
-                    # Tambahkan hasil ke list sesuai sheet
+                    # Buat prefix nama sheet untuk kombinasi (juz, metode) ini
+                    sheet_prefix = f"{NILAI_FILTER}_"
+
+                    # Tambahkan pasangan (nama_sheet, df) ke list untuk juz ini
                     if JENIS_OUTPUT_FINAL == "praktisi":
-                        all_data_frames_per_juz["Init"].append(app.df_init)
-                        all_data_frames_per_juz["Proses 1"].append(app.df_p1)
-                        all_data_frames_per_juz["Proses 2"].append(app.df_p2)
-                        all_data_frames_per_juz["Proses 3"].append(app.df_p3)
-                        all_data_frames_per_juz["Final"].append(app.df_final)
+                        data_to_write_for_juz.append((f"{sheet_prefix}Init_{metode}", app.df_init.copy()))
+                        data_to_write_for_juz.append((f"{sheet_prefix}Proses_1_{metode}", app.df_p1.copy()))
+                        data_to_write_for_juz.append((f"{sheet_prefix}Proses_2_{metode}", app.df_p2.copy()))
+                        data_to_write_for_juz.append((f"{sheet_prefix}Proses_3_{metode}", app.df_p3.copy())) # Pastikan app.df_p3 ada jika digunakan
+                        data_to_write_for_juz.append((f"{sheet_prefix}Final_{metode}", app.df_final.copy()))
                     elif JENIS_OUTPUT_FINAL == "pengguna":
-                        all_data_frames_per_juz["Init"].append(app.df_init)
-                        all_data_frames_per_juz["Final"].append(app.df_final)
+                        # Sesuaikan dengan sheet yang diinginkan untuk mode pengguna
+                        data_to_write_for_juz.append((f"{sheet_prefix}Init_{metode}", app.df_init.copy()))
+                        data_to_write_for_juz.append((f"{sheet_prefix}Final_{metode}", app.df_final.copy()))
 
-                # Gabungkan DataFrame per sheet untuk Juz ini
-                final_data_per_juz = {}
-                for sheet_name, df_list in all_data_frames_per_juz.items():
-                    if df_list:
-                        # Tambahkan kolom identifikasi opsional (metode, juz) jika perlu
-                        combined_df = pd.concat(df_list, ignore_index=True)
-                        # Misalnya, tambahkan kolom 'Metode' ke setiap baris
-                        metode_labels = []
-                        for df_orig in df_list:
-                             metode_labels.extend([df_orig.iloc[0, 0].split()[2]] * len(df_orig)) # Ambil metode dari kolom pertama baris pertama tiap df
-                        combined_df.insert(0, 'Metode', metode_labels)
-                        final_data_per_juz[sheet_name] = combined_df
+                # Ekspor ke file Excel per Juz dengan banyak sheet
+                if data_to_write_for_juz: # Jika ada data untuk ditulis
+                    # Gunakan template, format dengan juz saat ini dan "ALL" untuk metode (karena file berisi semua metode untuk juz tsb)
+                    juz_file_name_template = file_template.replace("{metode}", "ALL") # Ganti placeholder {metode} dengan "ALL"
+                    juz_file_name = juz_file_name_template.format(juz=NILAI_FILTER) # Ganti placeholder {juz} dengan nilai juz
+                    # Sanitasi nama file untuk karakter ilegal
+                    juz_file_name = sanitize_filename(juz_file_name)
+                    if not juz_file_name.lower().endswith(ext_default):
+                        juz_file_name += ext_default
+                    NAMA_FILE_OUTPUT_PER_JUZ = os.path.join(output_dir, juz_file_name)
 
-                # Ekspor ke file Excel per Juz
-                if final_data_per_juz:
-                     with pd.ExcelWriter(NAMA_FILE_OUTPUT_PER_JUZ, engine='openpyxl') as writer:
-                         for sheet_name, df in final_data_per_juz.items():
-                             df.to_excel(writer, sheet_name=sheet_name, index=False)
-                     print(f"[SAVED] File Excel untuk Juz {NILAI_FILTER} disimpan sebagai: {NAMA_FILE_OUTPUT_PER_JUZ}")
-                     # Kita tidak bisa langsung memformat file ini karena struktur datanya (banyak metode digabung) berbeda
-                     # dengan file single-metode/single-juz biasa.
-                     print("[INFO] File per Juz tidak diberi formatting otomatis karena struktur datanya berbeda.")
-                else:
+                    print(f"[INFO] Mengekspor ke file: {NAMA_FILE_OUTPUT_PER_JUZ}")
+                    try:
+                        # 1. Tulis DataFrame ke Excel
+                        with pd.ExcelWriter(NAMA_FILE_OUTPUT_PER_JUZ, engine='openpyxl') as writer:
+                            for sheet_name, df_to_write in data_to_write_for_juz:
+                                df_to_write.to_excel(writer, sheet_name=sheet_name, index=False)
+                        print(f"[SUCCESS] File Juz {NILAI_FILTER} berhasil diekspor.")
+                        
+                        # 2. TERAPKAN FORMATTING OTOMATIS (Ini yang sebelumnya di-skip)
+                        print("[INFO] Menerapkan formatting otomatis ke setiap sheet...")
+                        try:
+                            wb = openpyxl.load_workbook(NAMA_FILE_OUTPUT_PER_JUZ)
+                            for sheet_name in wb.sheetnames:
+                                ws = wb[sheet_name]
+                                # Cek apakah sheet_name adalah Final (mengandung "_Final")
+                                if "_Final" in sheet_name or sheet_name == "Final":
+                                    apply_final_style(ws, signature_text)
+                                else:
+                                    apply_standard_style(ws)
+                            wb.save(NAMA_FILE_OUTPUT_PER_JUZ)
+                            print(f"[OK] Formatting otomatis berhasil diterapkan ke file: {NAMA_FILE_OUTPUT_PER_JUZ}")
+                        except Exception as e:
+                            print(f"[ERROR] Gagal menerapkan formatting ke file {NAMA_FILE_OUTPUT_PER_JUZ}: {e}")
+                            import traceback
+                            traceback.print_exc()
+
+                    except Exception as e:
+                        print(f"[ERROR] Gagal menulis file {NAMA_FILE_OUTPUT_PER_JUZ}: {e}")
+                    #### block was edited 2208
+
+                else: # Tidak ada data untuk diekspor
                     print(f"[WARNING] Tidak ada data untuk diekspor ke file Juz {NILAI_FILTER}.")
 
+
+            #
         else: # --- Mode Output Lain (HTML atau Excel Single File Per Metode Lama) ---
             # Mode lama: satu file per metode (seperti sebelum fitur tambahan)
             # Kita bisa mempertahankan logika lama di sini jika format bukan excel atau mode bukan single_file/per_juz
@@ -422,14 +442,14 @@ def main():
 # --- Fungsi Styling untuk File Gabungan ---
 def apply_standard_style(ws):
     """Apply basic Excel styling to a worksheet."""
-    font_header = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+    font_header = Font(name="Arial", size=10, bold=True, color="000000")
     font_body = Font(name="Arial", size=10)
     font_label = Font(name="Arial", size=10, bold=True)
     font_title = Font(name="Arial", size=12, bold=True)
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
-    fill_alt = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    # fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    fill_alt = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
     thin_border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
@@ -443,7 +463,7 @@ def apply_standard_style(ws):
                 cell.alignment = align_center
                 if row == 1:
                     cell.font = font_header
-                    cell.fill = fill_header
+                    # cell.fill = fill_header
                 else:
                     cell.font = font_body
                     if col == 1:
@@ -469,7 +489,7 @@ def apply_final_style(ws, signature_text):
     """Apply specific Excel styling for the 'Final' worksheet."""
     font_title = Font(name="Arial", size=14, bold=True, color="000000")
     font_subtitle = Font(name="Arial", size=11, bold=True, italic=True)
-    font_header = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    font_header = Font(name="Arial", size=11, bold=True, color="000000")
     font_body_regular = Font(name="Arial", size=10)
     font_arab = Font(name="Arial", size=12, bold=True)
     font_label = Font(name="Arial", size=10, bold=True, color="000000")
@@ -477,8 +497,8 @@ def apply_final_style(ws, signature_text):
     font_label_bold = Font(name="Arial", size=10, bold=True)
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     align_center_top = Alignment(horizontal="center", vertical="top", wrap_text=True)
-    fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
-    fill_alt_row = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    # fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    fill_alt_row = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
     thin_border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
@@ -518,7 +538,7 @@ def apply_final_style(ws, signature_text):
     for col in range(1, 11):
         cell = ws.cell(row=5, column=col)
         cell.font = font_header
-        cell.fill = fill_header
+        # cell.fill = fill_header
         cell.alignment = align_center
         cell.border = thin_border
 
@@ -546,28 +566,28 @@ def apply_final_style(ws, signature_text):
             ws.column_dimensions[col_letter].width = width
 
     signature_row = ws.max_row + 2
-    signature_title = "__"
-    signature_stamp = f": {signature_text}"
-    signature_time = f": {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    signature_title = "Berdasarkan Kajian Tafsir Format Struktur Quran Luqman AQ Sumabrata"
+    signature_stamp = f"Dituliskan kembali: {signature_text}"
+    signature_time = f"Dicetak di Depok: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
     ws.merge_cells(start_row=signature_row, start_column=1, end_row=signature_row, end_column=10)
     ws.cell(signature_row, 1, value=signature_title)
     ws.cell(signature_row, 1).font = Font(name="Arial", size=12, bold=True, color="1F497D")
     ws.cell(signature_row, 1).alignment = Alignment(horizontal="center", vertical="center")
-    ws.cell(signature_row, 1).fill = PatternFill(start_color="E9F2FF", end_color="E9F2FF", fill_type="solid")
-    ws.cell(signature_row, 1).border = thin_border
+    # ws.cell(signature_row, 1).fill = PatternFill(start_color="E9F2FF", end_color="E9F2FF", fill_type="solid")
+    # ws.cell(signature_row, 1).border = thin_border
 
     ws.merge_cells(start_row=signature_row + 1, start_column=1, end_row=signature_row + 1, end_column=10)
     ws.cell(signature_row + 1, 1, value=signature_stamp)
     ws.cell(signature_row + 1, 1).font = font_label_bold
     ws.cell(signature_row + 1, 1).alignment = Alignment(horizontal="center", vertical="center")
-    ws.cell(signature_row + 1, 1).border = thin_border
+    # ws.cell(signature_row + 1, 1).border = thin_border
 
     ws.merge_cells(start_row=signature_row + 2, start_column=1, end_row=signature_row + 2, end_column=10)
     ws.cell(signature_row + 2, 1, value=signature_time)
     ws.cell(signature_row + 2, 1).font = Font(name="Arial", size=9, italic=True)
     ws.cell(signature_row + 2, 1).alignment = Alignment(horizontal="center", vertical="center")
-    ws.cell(signature_row + 2, 1).border = thin_border
+    # ws.cell(signature_row + 2, 1).border = thin_border
 
 from datetime import datetime # Import datetime untuk signature di final style
 

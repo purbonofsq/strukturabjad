@@ -1,0 +1,61 @@
+======================================================
+BATCH EXPORT EXCEL/CALC TO PDF - PYTHON + LIBREOFFICE
+======================================================
+LibreOffice     : C:\Program Files\LibreOffice\program\soffice.exe
+Folder input    :
+  - C:\Users\purbo\OneDrive\Documents\GitHub\purbonofsq\strukturabjad\strukturabjad\dataoutput
+Folder output   : C:\Users\purbo\OneDrive\Documents\GitHub\purbonofsq\strukturabjad\strukturabjad\pdfout
+Profile         : C:\Users\purbo\AppData\Local\Temp\lo_profile_20260811_124115
+Total file      : 36
+Proses subfolder: True
+Overwrite PDF   : False
+======================================================
+[1/36] OK    : _testout_Juz27_T111.xlsx -> _testout_Juz27_T111.pdf
+[2/36] OK    : _testout_Juz27_T222.xlsx -> _testout_Juz27_T222.pdf
+[3/36] OK    : _testout_Juz27_T333.xlsx -> _testout_Juz27_T333.pdf
+[4/36] OK    : JabalNur_AsmaulHusna_Huruf_Ain__JuzALL_ALL.xlsx -> JabalNur_AsmaulHusna_Huruf_Ain__JuzALL_ALL.pdf
+[5/36] OK    : JabalNur_AsmaulHusna_Murni__JuzALL_ALL.xlsx -> JabalNur_AsmaulHusna_Murni__JuzALL_ALL.pdf
+[6/36] OK    : JBAH_Huruf_Ain_JuzALL_ALL.xlsx -> JBAH_Huruf_Ain_JuzALL_ALL.pdf
+[7/36] OK    : JBAH_SemuaJuz_JuzALL_ALL.xlsx -> JBAH_SemuaJuz_JuzALL_ALL.pdf
+[8/36] OK    : MyFamily__JuzALL_ALL.xlsx -> MyFamily__JuzALL_ALL.pdf
+[9/36] OK    : Output_JBAH_Juz18_T111.xlsx -> Output_JBAH_Juz18_T111.pdf
+[10/36] OK    : Output_JBAH_Juz18_T222.xlsx -> Output_JBAH_Juz18_T222.pdf
+[11/36] OK    : Output_JBAH_Juz18_T333.xlsx -> Output_JBAH_Juz18_T333.pdf
+[12/36] OK    : Output_JBAH_Juz21_T111.xlsx -> Output_JBAH_Juz21_T111.pdf
+[13/36] OK    : Output_JBAH_Juz21_T222.xlsx -> Output_JBAH_Juz21_T222.pdf
+[14/36] OK    : Output_JBAH_Juz21_T333.xlsx -> Output_JBAH_Juz21_T333.pdf
+[15/36] OK    : Output_JBAH_Juz22_T111.xlsx -> Output_JBAH_Juz22_T111.pdf
+[16/36] OK    : Output_JBAH_Juz22_T222.xlsx -> Output_JBAH_Juz22_T222.pdf
+[17/36] OK    : Output_JBAH_Juz22_T333.xlsx -> Output_JBAH_Juz22_T333.pdf
+[18/36] OK    : Output_JBAH_Juz27_T111.xlsx -> Output_JBAH_Juz27_T111.pdf
+[19/36] OK    : Output_JBAH_Juz27_T222.xlsx -> Output_JBAH_Juz27_T222.pdf
+[20/36] OK    : Output_JBAH_Juz27_T333.xlsx -> Output_JBAH_Juz27_T333.pdf
+[21/36] OK    : Output_JBAH_Juz28_T111.xlsx -> Output_JBAH_Juz28_T111.pdf
+[22/36] OK    : Output_JBAH_Juz28_T222.xlsx -> Output_JBAH_Juz28_T222.pdf
+[23/36] OK    : Output_JBAH_Juz28_T333.xlsx -> Output_JBAH_Juz28_T333.pdf
+[24/36] GAGAL : Output_JBAH_JuzALL_ALL.xlsx -> returncode=0; stderr=Error: source file could not be loaded; stdout=
+[25/36] OK    : Test2_v2_Juz27_T111.xlsx -> Test2_v2_Juz27_T111.pdf
+[26/36] OK    : Test2_v2_Juz27_T222.xlsx -> Test2_v2_Juz27_T222.pdf
+[27/36] OK    : Test2_v2_Juz27_T333.xlsx -> Test2_v2_Juz27_T333.pdf
+[28/36] OK    : Test_v2_Juz27_T111.xlsx -> Test_v2_Juz27_T111.pdf
+[29/36] OK    : Test_v2_Juz27_T222.xlsx -> Test_v2_Juz27_T222.pdf
+[30/36] OK    : Test_v2_Juz27_T333.xlsx -> Test_v2_Juz27_T333.pdf
+[31/36] OK    : testout2728_JuzALL_ALL.xlsx -> testout2728_JuzALL_ALL.pdf
+[32/36] GAGAL : testoutbbb_JuzALL_ALL.xlsx -> returncode=0; stderr=Error: source file could not be loaded; stdout=
+[33/36] OK    : testoutt_JuzALL_ALL.xlsx -> testoutt_JuzALL_ALL.pdf
+[34/36] OK    : yyyyy_Juz14_T111.xlsx -> yyyyy_Juz14_T111.pdf
+[35/36] OK    : yyyyy_Juz14_T222.xlsx -> yyyyy_Juz14_T222.pdf
+[36/36] OK    : yyyyy_Juz14_T333.xlsx -> yyyyy_Juz14_T333.pdf
+
+======================================================
+RINGKASAN
+======================================================
+Total   : 36
+OK      : 34
+Skip    : 0
+Gagal   : 2
+Log     : C:\Users\purbo\OneDrive\Documents\GitHub\purbonofsq\strukturabjad\strukturabjad\pdfout\export_log_20260811_124115.txt
+
+Detail file gagal:
+C:\Users\purbo\OneDrive\Documents\GitHub\purbonofsq\strukturabjad\strukturabjad\dataoutput\Output_JBAH_JuzALL_ALL.xlsx | returncode=0; stderr=Error: source file could not be loaded; stdout=
+C:\Users\purbo\OneDrive\Documents\GitHub\purbonofsq\strukturabjad\strukturabjad\dataoutput\testoutbbb_JuzALL_ALL.xlsx | returncode=0; stderr=Error: source file could not be loaded; stdout=
