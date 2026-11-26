@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 from outputproc import export_and_format_output
 
 class PengolahDataJBAH:
-    def __init__(self, file_path, concept_label="Konsep Dasar (metode jumlah ayat dalam juz)", signature_text="Ainurrahman Cluster MDC"):
+    def __init__(self, file_path, concept_label="Konsep Ayat Murni (metode jumlah ayat dalam juz)", signature_text="Ainurrahman Cluster MDC"):
         """Inisialisasi class dan memuat data mentah Excel."""
         self.file_path = file_path
         self.concept_label = concept_label
@@ -203,7 +203,7 @@ class PengolahDataJBAH:
 
     def generate_tabel_ah_final(self):
         """Tahap II.2.5: Tabel Asmaul Husna"""
-        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'I', 'II', 'III', 'Iv', 'V', 'VI', 'VII']
+        latin_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '1', '2', '3', '4', '5', '6', '7']
         arab_chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ھ', 'لا', 'ء', 'ي', 'ال', 'ة', 'هؤ']
         
         baris_final: List[List[Any]] = []
@@ -254,7 +254,7 @@ if __name__ == "__main__":
     JENIS_OUTPUT = "pengguna"  # Misalnya, defaultnya "pengguna"
     FORMAT_OUTPUT = "excel"    # Misalnya, defaultnya "excel"
 
-    concept_label = input("Masukkan label konsep dasar (default: Konsep Dasar (metode jumlah ayat dalam juz)): ").strip() or "Konsep Dasar (metode jumlah ayat dalam juz)"
+    concept_label = input("Masukkan label konsep dasar (default: Konsep Ayat Murni (metode jumlah ayat dalam juz)): ").strip() or "Konsep Ayat Murni (metode jumlah ayat dalam juz)"
     signature_text = input("Masukkan tanda tangan / penandatangan (default: Ainurrahman Cluster MDC): ").strip() or "Ainurrahman Cluster MDC"
 
     app = PengolahDataJBAH(FILE_MENTAH, concept_label=concept_label, signature_text=signature_text)
