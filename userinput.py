@@ -216,7 +216,7 @@ def main():
 
     # ----------------------------
 
-    default_concept_label = "Konsep Dasar (metode jumlah ayat dalam juz)"
+    default_concept_label = "Konsep Ayat Murni (metode jumlah ayat dalam juz)"
     concept_label = input(f"Masukkan label konsep dasar (default: {default_concept_label}): ").strip() or default_concept_label
 
     default_signature = "Ainurrahman Cluster MDC"
