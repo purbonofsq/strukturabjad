@@ -350,7 +350,7 @@ class FormatterTabelFinal:
                 if row % 2 == 0:
                     cell.fill = fill_alt_row
 
-        column_widths = {"A": 5, "B": 7, "C": 10, "D": 4, "E": 10, "F": 4, "G": 10, "H": 7, "I": 15, "J": 5}
+        column_widths = {"A": 5, "B": 7, "C": 10, "D": 4, "E": 10, "F": 4, "G": 10, "H": 7, "I": 18, "J": 5}
         for col_letter, width in column_widths.items():
             if col_letter in ws.column_dimensions:
                 ws.column_dimensions[col_letter].width = width
