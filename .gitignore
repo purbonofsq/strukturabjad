@@ -15,3 +15,8 @@ git_status.txt
 .continue/
 HitungHuruf_Mim/
 HitungHuruf_Wau/
+*.xlsx
+*.zip
+*.pdf
+.env
+*.log
